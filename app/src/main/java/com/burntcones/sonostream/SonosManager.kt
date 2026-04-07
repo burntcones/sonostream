@@ -9,6 +9,9 @@ import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.*
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.ConcurrentHashMap
 import java.util.regex.Pattern
 import javax.xml.parsers.DocumentBuilderFactory
 
@@ -169,12 +172,60 @@ object SonosManager {
             Log.e(TAG, "SSDP discovery failed", e)
         }
 
-        Log.d(TAG, "Discovery complete: ${found.size} speaker(s)")
+        Log.d(TAG, "SSDP found ${found.size} speaker(s)")
+
+        // Fallback: if SSDP found nothing, scan the local subnet for Sonos port 1400
+        if (found.isEmpty() && context != null) {
+            Log.d(TAG, "SSDP found nothing — falling back to subnet scan")
+            val subnetResults = scanSubnetForSonos(context)
+            found.putAll(subnetResults)
+            Log.d(TAG, "Subnet scan found ${subnetResults.size} speaker(s)")
+        }
 
         // Resolve groups: query ZoneGroupTopology from any speaker
         val grouped = resolveGroups(found)
         speakers = grouped
         return grouped
+    }
+
+    /**
+     * Scan the local /24 subnet for Sonos speakers by probing port 1400.
+     * Every Sonos speaker exposes its device description XML at
+     * http://{ip}:1400/xml/device_description.xml
+     */
+    private fun scanSubnetForSonos(context: Context): Map<String, SonosSpeaker> {
+        val wifiAddr = getWifiAddress(context) ?: return emptyMap()
+        val ipParts = wifiAddr.hostAddress?.split(".") ?: return emptyMap()
+        if (ipParts.size != 4) return emptyMap()
+        val subnet = "${ipParts[0]}.${ipParts[1]}.${ipParts[2]}"
+        Log.d(TAG, "Scanning subnet $subnet.0/24 on port 1400")
+
+        val found = ConcurrentHashMap<String, SonosSpeaker>()
+        val executor = Executors.newFixedThreadPool(24)
+
+        for (i in 1..254) {
+            executor.submit {
+                val ip = "$subnet.$i"
+                try {
+                    val socket = Socket()
+                    socket.connect(InetSocketAddress(ip, 1400), 300)
+                    socket.close()
+                    // Port 1400 is open — fetch device description
+                    Log.d(TAG, "Port 1400 open on $ip — checking for Sonos")
+                    val speaker = fetchDeviceInfo("http://$ip:1400/xml/device_description.xml")
+                    if (speaker != null) {
+                        Log.d(TAG, "Subnet scan found: ${speaker.name} @ $ip")
+                        found[speaker.name] = speaker
+                    }
+                } catch (_: Exception) {
+                    // Connection refused or timeout — not a Sonos speaker
+                }
+            }
+        }
+
+        executor.shutdown()
+        executor.awaitTermination(8, TimeUnit.SECONDS)
+        return found
     }
 
     private fun resolveGroups(discovered: Map<String, SonosSpeaker>): MutableMap<String, SonosSpeaker> {
