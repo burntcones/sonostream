@@ -39,6 +39,15 @@ class ApiServer(
                     jsonResponse(JSONObject().apply {
                         put("speakers", JSONArray().apply { SonosManager.speakers.values.forEach { put(it.toJson()) } })
                         put("count", SonosManager.speakers.size)
+                        put("diagnostics", SonosManager.lastDiagnostics)
+                    })
+                }
+
+                method == Method.GET && uri == "/api/debug" -> {
+                    jsonResponse(JSONObject().apply {
+                        put("diagnostics", SonosManager.lastDiagnostics)
+                        put("speaker_count", SonosManager.speakers.size)
+                        put("local_ip", getLocalIp())
                     })
                 }
 

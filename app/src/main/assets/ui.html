@@ -757,8 +757,14 @@ async function rescanSpeakers() {
     renderSpeakerList();
     if (speakers.length === 1 && !selectedSpeaker) selectSpeaker(speakers[0]);
     updateSpeakerBar();
-    if (!speakers.length) showToast('No speakers found. Check WiFi and try again.', 'warning');
-    else showToast(`Found ${speakers.length} speaker${speakers.length > 1 ? 's' : ''}`, 'success');
+    if (!speakers.length) {
+      // Show diagnostics so user (or dev) can see exactly what happened
+      const diag = data.diagnostics || 'No diagnostics available';
+      showToast('No speakers found — see details below', 'warning');
+      $('fileList').innerHTML = `<div class="empty-state" style="text-align:left;font-size:12px;font-family:monospace;white-space:pre-wrap;padding:20px;color:var(--text2);">Discovery Diagnostics:\n\n${diag}\n\nCheck:\n• Phone and speakers on same WiFi?\n• Router AP isolation OFF?\n• Sonos UPnP enabled? (Settings > Privacy)</div>`;
+    } else {
+      showToast(`Found ${speakers.length} speaker${speakers.length > 1 ? 's' : ''}`, 'success');
+    }
   } catch (e) {
     showToast('Network scan failed. Check WiFi connection.', 'error');
   } finally {
