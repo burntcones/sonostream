@@ -1,6 +1,8 @@
 package com.burntcones.sonostream
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.wifi.WifiManager
 import android.util.Log
 import org.json.JSONObject
@@ -50,6 +52,55 @@ object SonosManager {
 
     private const val TAG = "SonosManager"
 
+    /**
+     * Resolve the WiFi local address using ConnectivityManager (modern) with
+     * WifiManager fallback (legacy). Returns null if WiFi is not connected.
+     */
+    private fun getWifiAddress(context: Context): InetAddress? {
+        // Modern approach: ConnectivityManager (API 23+)
+        try {
+            val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            val activeNetwork = cm.activeNetwork
+            if (activeNetwork != null) {
+                val caps = cm.getNetworkCapabilities(activeNetwork)
+                if (caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+                    val lp = cm.getLinkProperties(activeNetwork)
+                    lp?.linkAddresses?.forEach { la ->
+                        val addr = la.address
+                        if (addr is Inet4Address && !addr.isLoopbackAddress) {
+                            Log.d(TAG, "WiFi address (ConnectivityManager): ${addr.hostAddress}")
+                            return addr
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "ConnectivityManager lookup failed: ${e.message}")
+        }
+
+        // Fallback: WifiManager
+        try {
+            val wifi = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+            @Suppress("DEPRECATION")
+            val ip = wifi.connectionInfo.ipAddress
+            if (ip != 0) {
+                val ipBytes = byteArrayOf(
+                    (ip and 0xff).toByte(),
+                    (ip shr 8 and 0xff).toByte(),
+                    (ip shr 16 and 0xff).toByte(),
+                    (ip shr 24 and 0xff).toByte()
+                )
+                val addr = InetAddress.getByAddress(ipBytes)
+                Log.d(TAG, "WiFi address (WifiManager fallback): ${addr.hostAddress}")
+                return addr
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "WifiManager lookup failed: ${e.message}")
+        }
+
+        return null
+    }
+
     fun discover(context: Context? = null, timeoutMs: Int = 4000): Map<String, SonosSpeaker> {
         val found = mutableMapOf<String, SonosSpeaker>()
         val msg = "M-SEARCH * HTTP/1.1\r\n" +
@@ -60,54 +111,32 @@ object SonosManager {
             "\r\n"
 
         try {
-            // Get the WiFi interface so we send multicast on the right network
-            var wifiInterface: NetworkInterface? = null
-            if (context != null) {
-                try {
-                    val wifi = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-                    @Suppress("DEPRECATION")
-                    val ip = wifi.connectionInfo.ipAddress
-                    if (ip != 0) {
-                        val ipBytes = byteArrayOf(
-                            (ip and 0xff).toByte(),
-                            (ip shr 8 and 0xff).toByte(),
-                            (ip shr 16 and 0xff).toByte(),
-                            (ip shr 24 and 0xff).toByte()
-                        )
-                        val wifiAddr = InetAddress.getByAddress(ipBytes)
-                        wifiInterface = NetworkInterface.getByInetAddress(wifiAddr)
-                        Log.d(TAG, "WiFi IP: ${wifiAddr.hostAddress}, interface: ${wifiInterface?.name}")
-                    }
-                } catch (e: Exception) {
-                    Log.w(TAG, "Could not determine WiFi interface: ${e.message}")
-                }
-            }
+            // Resolve WiFi address and interface
+            val wifiAddr = if (context != null) getWifiAddress(context) else null
+            val localAddr = wifiAddr ?: InetAddress.getByName("0.0.0.0")
+            Log.d(TAG, "Discovery binding to: ${localAddr.hostAddress}")
 
-            val group = InetAddress.getByName(SSDP_ADDR)
-            val sock = MulticastSocket(null).apply {
+            // ── Two-socket pattern (ConnectSDK proven approach) ──
+            // DatagramSocket on ephemeral port bound to WiFi IP: sends M-SEARCH,
+            // receives unicast responses. SSDP responses to M-SEARCH are unicast
+            // back to the sender, so we do NOT need to join the multicast group.
+            val sock = DatagramSocket(null).apply {
                 reuseAddress = true
                 soTimeout = timeoutMs
-                if (wifiInterface != null) {
-                    networkInterface = wifiInterface
-                }
-                bind(InetSocketAddress(0)) // bind to any available port
+                bind(InetSocketAddress(localAddr, 0))  // ephemeral port on WiFi interface
             }
 
-            // Join the multicast group to ensure proper routing on Android
-            if (wifiInterface != null) {
-                sock.joinGroup(InetSocketAddress(group, SSDP_PORT), wifiInterface)
-            } else {
-                sock.joinGroup(group)
-            }
+            Log.d(TAG, "Bound to ${sock.localAddress.hostAddress}:${sock.localPort}")
 
+            val group = InetAddress.getByName(SSDP_ADDR)
             val sendData = msg.toByteArray()
             val packet = DatagramPacket(sendData, sendData.size, group, SSDP_PORT)
 
-            // Send M-SEARCH 3 times (UDP is unreliable)
+            // Send M-SEARCH 3 times — UDP is unreliable
             for (i in 1..3) {
                 sock.send(packet)
-                Log.d(TAG, "Sent M-SEARCH packet #$i")
-                if (i < 3) Thread.sleep(100)
+                Log.d(TAG, "Sent M-SEARCH #$i (${sendData.size} bytes)")
+                if (i < 3) Thread.sleep(200)
             }
 
             val deadline = System.currentTimeMillis() + timeoutMs
@@ -118,14 +147,15 @@ object SonosManager {
                     val pkt = DatagramPacket(buf, buf.size)
                     sock.receive(pkt)
                     val response = String(pkt.data, 0, pkt.length)
-                    Log.d(TAG, "SSDP response from ${pkt.address?.hostAddress}: ${response.take(200)}")
-                    val locMatch = Pattern.compile("LOCATION:\\s*(.*?)\\r\\n", Pattern.CASE_INSENSITIVE).matcher(response)
+                    Log.d(TAG, "SSDP response from ${pkt.address?.hostAddress}:${pkt.port}")
+
+                    val locMatch = Pattern.compile("LOCATION:\\s*(.*?)\\r?\\n", Pattern.CASE_INSENSITIVE).matcher(response)
                     if (locMatch.find()) {
                         val location = locMatch.group(1)!!.trim()
                         if (location !in found.values.map { it.location }) {
-                            Log.d(TAG, "Fetching device info from: $location")
+                            Log.d(TAG, "Fetching device info: $location")
                             fetchDeviceInfo(location)?.let {
-                                Log.d(TAG, "Found speaker: ${it.name} (${it.model}) at ${it.ip}")
+                                Log.d(TAG, "Found: ${it.name} (${it.model}) @ ${it.ip}")
                                 found[it.name] = it
                             }
                         }
@@ -134,15 +164,12 @@ object SonosManager {
                     break
                 }
             }
-
-            try { sock.leaveGroup(group) } catch (_: Exception) {}
             sock.close()
         } catch (e: Exception) {
             Log.e(TAG, "SSDP discovery failed", e)
-            e.printStackTrace()
         }
 
-        Log.d(TAG, "Discovery complete: found ${found.size} speaker(s)")
+        Log.d(TAG, "Discovery complete: ${found.size} speaker(s)")
 
         // Resolve groups: query ZoneGroupTopology from any speaker
         val grouped = resolveGroups(found)
