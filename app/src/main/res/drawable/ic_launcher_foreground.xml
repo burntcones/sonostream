@@ -1,0 +1,57 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Sound wave arcs - centered in the adaptive icon safe zone (54,54) -->
+    <path
+        android:pathData="M54,36 L54,72"
+        android:strokeWidth="4"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"/>
+    <path
+        android:pathData="M46,42 Q46,54 46,54 Q46,54 46,66"
+        android:strokeWidth="0"
+        android:fillColor="#00000000"/>
+    <!-- Inner arc -->
+    <path
+        android:pathData="M46,44 C40,48 40,60 46,64"
+        android:strokeWidth="3.5"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"/>
+    <!-- Middle arc -->
+    <path
+        android:pathData="M40,38 C30,45 30,63 40,70"
+        android:strokeWidth="3.5"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"/>
+    <!-- Outer arc -->
+    <path
+        android:pathData="M34,32 C20,42 20,66 34,76"
+        android:strokeWidth="3.5"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"/>
+    <!-- Right side arcs (mirrored) -->
+    <path
+        android:pathData="M62,44 C68,48 68,60 62,64"
+        android:strokeWidth="3.5"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"/>
+    <path
+        android:pathData="M68,38 C78,45 78,63 68,70"
+        android:strokeWidth="3.5"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"/>
+    <path
+        android:pathData="M74,32 C88,42 88,66 74,76"
+        android:strokeWidth="3.5"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"/>
+</vector>
