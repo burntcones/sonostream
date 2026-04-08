@@ -1119,11 +1119,20 @@ $('btnNext').addEventListener('click', () => playNext(1));
 
 // ─── Volume ─────────────────────────────────────────────────────────────────
 let volTimeout;
+let volInteracting = false;
 $('volumeSlider').addEventListener('input', e => {
+  volInteracting = true;
   clearTimeout(volTimeout);
   volTimeout = setTimeout(() => {
-    if (selectedSpeaker) api('POST', '/api/volume', { speaker: selectedSpeaker.name, volume: +e.target.value });
+    if (selectedSpeaker) {
+      api('POST', '/api/volume', { speaker: selectedSpeaker.name, volume: +e.target.value })
+        .catch(() => {});
+    }
   }, 150);
+});
+// Release the guard after the user lifts their finger / releases mouse
+$('volumeSlider').addEventListener('change', () => {
+  setTimeout(() => { volInteracting = false; }, 2500);
 });
 
 // ─── Progress Bar Click-to-Seek ─────────────────────────────────────────────
@@ -1163,7 +1172,7 @@ async function fetchStatus() {
     const data = await api('GET', `/api/status/${encodeURIComponent(selectedSpeaker.name)}`);
     pollFailCount = 0;
 
-    if (data.volume != null) $('volumeSlider').value = data.volume;
+    if (data.volume != null && !volInteracting) $('volumeSlider').value = data.volume;
 
     const dur = parseTime(data.position?.duration);
     const pos = parseTime(data.position?.position);
