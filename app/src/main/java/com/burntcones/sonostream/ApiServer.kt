@@ -454,41 +454,14 @@ class ApiServer(
     // ── Audio file serving with range support ───────────────────────────
 
     private fun serveAudio(session: IHTTPSession, uri: String): Response {
-        val relPath = URLDecoder.decode(uri.removePrefix("/audio/"), "UTF-8")
+        val relPath = URLDecoder.decode(uri.removePrefix("/audio/").split("?")[0], "UTF-8")
         val file = resolveAudioFile(relPath) ?: return newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "File not found")
 
-        // Check if EQ is active (has any non-zero gain band enabled)
-        val eqActive = !eq.bypass && eq.getBands().any { it.enabled && it.gainDb != 0f }
-
-        if (eqActive) {
-            return serveEqAudio(session, file)
-        }
-
-        // No EQ — serve original file directly
-        val mime = mimeForAudio(file)
-        val fileSize = file.length()
-        val rangeHeader = session.headers["range"]
-
-        if (rangeHeader != null && rangeHeader.startsWith("bytes=")) {
-            val rangeParts = rangeHeader.removePrefix("bytes=").split("-")
-            val start = rangeParts[0].toLongOrNull() ?: 0
-            val end = if (rangeParts.size > 1 && rangeParts[1].isNotEmpty()) rangeParts[1].toLong() else fileSize - 1
-            val length = end - start + 1
-
-            val fis = FileInputStream(file)
-            fis.skip(start)
-
-            val response = newFixedLengthResponse(Response.Status.PARTIAL_CONTENT, mime, fis, length)
-            response.addHeader("Content-Range", "bytes $start-$end/$fileSize")
-            response.addHeader("Accept-Ranges", "bytes")
-            response.addHeader("Content-Length", length.toString())
-            return response
-        }
-
-        val fis = FileInputStream(file)
-        val response = newFixedLengthResponse(Response.Status.OK, mime, fis, fileSize)
-        response.addHeader("Accept-Ranges", "bytes")
-        return response
+        // Always stream through EQ decode path so live EQ changes take effect
+        // mid-stream without restarting the track. At 0dB gain, filters are
+        // transparent (H(z)=1), so there's no quality loss when EQ is flat.
+        // The ?eq= query param (if present) is just for Sonos cache-busting.
+        return serveEqAudio(session, file)
     }
 
     /**

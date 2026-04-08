@@ -1,6 +1,6 @@
 {
-  "versionCode": 9,
-  "versionName": "1.5.0",
-  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v1.5.0/sonostream.apk",
-  "releaseNotes": "Streaming parametric EQ — processes on the fly, tap band nodes to edit Q/type"
+  "versionCode": 10,
+  "versionName": "1.6.0",
+  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v1.6.0/sonostream.apk",
+  "releaseNotes": "Live streaming EQ (changes apply mid-stream), media notification controls fixed, EQ tap popup fixed"
 }

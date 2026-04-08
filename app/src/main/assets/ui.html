@@ -1691,30 +1691,11 @@ function eqFindBand(px, py, w, h) {
 }
 
 let eqUpdateTimeout = null;
-let eqApplyTimeout = null;
 let eqEditBand = -1; // which band is being edited in popup
 
-/** Re-send current track to Sonos so it re-fetches with EQ-processed audio. */
-async function applyEqToSpeaker() {
-  if (!currentFile || !selectedSpeakers.length) return;
-  const sonos = sonosSpeakers();
-  if (!sonos.length) return;
-  try {
-    if (sonos.length > 1) {
-      await api('POST', '/api/play-multi', { speakers: sonos.map(s => s.name), file: currentFile });
-    } else {
-      await api('POST', '/api/play', { speaker: sonos[0].name, file: currentFile });
-    }
-    showToast('EQ applied', 'success');
-  } catch (e) {
-    showToast('EQ apply failed: ' + e.message, 'error');
-  }
-}
-
-function scheduleEqApply() {
-  clearTimeout(eqApplyTimeout);
-  eqApplyTimeout = setTimeout(applyEqToSpeaker, 1500);
-}
+// EQ changes are now applied LIVE to the audio stream — no need to restart the
+// track. The server-side processing thread picks up parameter changes on each
+// audio buffer (~10ms). Changes take effect within 2-5s (Sonos buffer drain).
 
 function sendBandUpdate(bandIndex) {
   clearTimeout(eqUpdateTimeout);
@@ -1729,7 +1710,6 @@ function sendBandUpdate(bandIndex) {
     }).then(() => refreshEqResponse())
       .catch(err => showToast('EQ update failed: ' + err.message, 'error'));
   }, 100);
-  scheduleEqApply();
 }
 
 function eqDragUpdate(bandIndex, freq, gain) {
@@ -1743,11 +1723,17 @@ function eqDragUpdate(bandIndex, freq, gain) {
 }
 
 // Drag on canvas to move band freq/gain
+// Use a movement threshold (8px) so finger jitter on tap doesn't count as drag
 let eqDragMoved = false;
+let eqDragStartX = 0, eqDragStartY = 0;
+const EQ_TAP_THRESHOLD = 8; // px — movement less than this counts as a tap
+
 eqCanvas.addEventListener('pointerdown', e => {
   const { x, y, w, h } = eqPointerPos(e);
   eqDragging = eqFindBand(x, y, w, h);
   eqDragMoved = false;
+  eqDragStartX = x;
+  eqDragStartY = y;
   if (eqDragging >= 0) {
     eqCanvas.setPointerCapture(e.pointerId);
     drawEq();
@@ -1756,8 +1742,10 @@ eqCanvas.addEventListener('pointerdown', e => {
 
 eqCanvas.addEventListener('pointermove', e => {
   if (eqDragging < 0) return;
-  eqDragMoved = true;
   const { x, y, w, h } = eqPointerPos(e);
+  const dx = x - eqDragStartX, dy = y - eqDragStartY;
+  if (!eqDragMoved && Math.sqrt(dx*dx + dy*dy) < EQ_TAP_THRESHOLD) return;
+  eqDragMoved = true;
   eqDragUpdate(eqDragging, xToFreq(x, w), yToGain(y, h));
 });
 
@@ -1765,7 +1753,7 @@ eqCanvas.addEventListener('pointerup', e => {
   const band = eqDragging;
   eqDragging = -1;
   drawEq();
-  // If user tapped (didn't drag), open edit popup
+  // If user tapped (didn't drag beyond threshold), open edit popup for Q/type
   if (!eqDragMoved && band >= 0) {
     openEqEdit(band, e);
   }
@@ -1808,7 +1796,6 @@ function removeEditingBand() {
   if (eqEditBand < 0) return;
   closeEqEdit();
   api('POST', '/api/eq/band', { action: 'remove', index: eqEditBand }).then(() => loadEqState());
-  scheduleEqApply();
 }
 
 function fmtFreq(f) {
@@ -1861,7 +1848,6 @@ $('btnEqBypass').addEventListener('click', async () => {
   updateEqBypassBtn();
   drawEq();
   await api('POST', '/api/eq/bypass', { bypass: eqBypass });
-  scheduleEqApply();
 });
 
 $('btnEqAdd').addEventListener('click', async () => {
@@ -1873,7 +1859,6 @@ $('btnEqAdd').addEventListener('click', async () => {
 $('btnEqReset').addEventListener('click', async () => {
   await api('POST', '/api/eq/reset');
   await loadEqState();
-  scheduleEqApply();
 });
 
 async function toggleEqBand(i) {
@@ -1881,13 +1866,11 @@ async function toggleEqBand(i) {
   renderEqBandList();
   await api('POST', '/api/eq/band', { action: 'update', index: i, ...eqBands[i] });
   await refreshEqResponse();
-  scheduleEqApply();
 }
 
 async function removeEqBand(i) {
   await api('POST', '/api/eq/band', { action: 'remove', index: i });
   await loadEqState();
-  scheduleEqApply();
 }
 
 // Add EQ toggle button to player controls

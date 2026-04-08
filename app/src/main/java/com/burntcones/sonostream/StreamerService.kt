@@ -11,6 +11,7 @@ import android.os.PowerManager
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.media.session.MediaButtonReceiver
 
@@ -22,6 +23,7 @@ class StreamerService : Service() {
     private var mediaSession: MediaSessionCompat? = null
 
     companion object {
+        private const val TAG = "StreamerService"
         private const val CHANNEL_ID = "sonostream_channel"
         private const val NOTIFICATION_ID = 1
 
@@ -65,67 +67,77 @@ class StreamerService : Service() {
     private fun setupMediaSession() {
         mediaSession = MediaSessionCompat(this, "SonoStream").apply {
             // Handle media button events (play/pause from notification, headphones, etc.)
+            // Uses direct SonosManager calls — NOT HTTP to 127.0.0.1, which fails
+            // because bindProcessToNetwork(wifiNetwork) blocks loopback connections.
             setCallback(object : MediaSessionCompat.Callback() {
                 override fun onPlay() {
-                    // Send play command to the API server via HTTP (same as UI does)
                     Thread {
                         try {
-                            val url = java.net.URL("http://127.0.0.1:${MainActivity.SERVER_PORT}/api/control")
-                            val conn = url.openConnection() as java.net.HttpURLConnection
-                            conn.requestMethod = "POST"
-                            conn.setRequestProperty("Content-Type", "application/json")
-                            conn.doOutput = true
-                            // Use first available Sonos speaker
-                            val speaker = SonosManager.speakers.keys.firstOrNull() ?: return@Thread
-                            conn.outputStream.write("""{"speaker":"$speaker","action":"Play"}""".toByteArray())
-                            conn.responseCode // trigger request
-                            conn.disconnect()
-                        } catch (_: Exception) {}
+                            val speaker = SonosManager.speakers.values.firstOrNull()
+                            if (speaker != null) {
+                                Log.d(TAG, "Media onPlay: ${speaker.name}")
+                                SonosManager.transportAction(speaker, "Play")
+                            } else {
+                                // Try local player as fallback
+                                LocalPlayer.resume()
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Media onPlay failed", e)
+                        }
                     }.start()
                 }
 
                 override fun onPause() {
                     Thread {
                         try {
-                            val url = java.net.URL("http://127.0.0.1:${MainActivity.SERVER_PORT}/api/control")
-                            val conn = url.openConnection() as java.net.HttpURLConnection
-                            conn.requestMethod = "POST"
-                            conn.setRequestProperty("Content-Type", "application/json")
-                            conn.doOutput = true
-                            val speaker = SonosManager.speakers.keys.firstOrNull() ?: return@Thread
-                            conn.outputStream.write("""{"speaker":"$speaker","action":"Pause"}""".toByteArray())
-                            conn.responseCode
-                            conn.disconnect()
-                        } catch (_: Exception) {}
+                            val speaker = SonosManager.speakers.values.firstOrNull()
+                            if (speaker != null) {
+                                Log.d(TAG, "Media onPause: ${speaker.name}")
+                                SonosManager.transportAction(speaker, "Pause")
+                            } else {
+                                LocalPlayer.pause()
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Media onPause failed", e)
+                        }
                     }.start()
                 }
 
                 override fun onStop() {
                     Thread {
                         try {
-                            val url = java.net.URL("http://127.0.0.1:${MainActivity.SERVER_PORT}/api/control")
-                            val conn = url.openConnection() as java.net.HttpURLConnection
-                            conn.requestMethod = "POST"
-                            conn.setRequestProperty("Content-Type", "application/json")
-                            conn.doOutput = true
-                            val speaker = SonosManager.speakers.keys.firstOrNull() ?: return@Thread
-                            conn.outputStream.write("""{"speaker":"$speaker","action":"Stop"}""".toByteArray())
-                            conn.responseCode
-                            conn.disconnect()
-                        } catch (_: Exception) {}
+                            val speaker = SonosManager.speakers.values.firstOrNull()
+                            if (speaker != null) {
+                                Log.d(TAG, "Media onStop: ${speaker.name}")
+                                SonosManager.transportAction(speaker, "Stop")
+                            } else {
+                                LocalPlayer.stop()
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Media onStop failed", e)
+                        }
                     }.start()
                 }
 
                 override fun onSkipToNext() {
-                    // Trigger next track via WebView JavaScript bridge
-                    MainActivity.instance?.runOnUiThread {
-                        MainActivity.instance?.evaluateJs("playNext(1)")
+                    Log.d(TAG, "Media onSkipToNext")
+                    try {
+                        MainActivity.instance?.runOnUiThread {
+                            MainActivity.instance?.evaluateJs("playNext(1)")
+                        } ?: Log.w(TAG, "MainActivity not available for skipToNext")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Media onSkipToNext failed", e)
                     }
                 }
 
                 override fun onSkipToPrevious() {
-                    MainActivity.instance?.runOnUiThread {
-                        MainActivity.instance?.evaluateJs("playNext(-1)")
+                    Log.d(TAG, "Media onSkipToPrevious")
+                    try {
+                        MainActivity.instance?.runOnUiThread {
+                            MainActivity.instance?.evaluateJs("playNext(-1)")
+                        } ?: Log.w(TAG, "MainActivity not available for skipToPrevious")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Media onSkipToPrevious failed", e)
                     }
                 }
             })

@@ -61,8 +61,12 @@ object AudioProcessor {
      * Stream-process audio: decode → EQ → WAV, writing directly to an OutputStream.
      * Starts producing output within milliseconds. Runs at 10-50x real-time.
      *
+     * The EQ parameters are read LIVE from [liveEq] — changes made by the UI thread
+     * are picked up on the next output buffer (~10ms). This means EQ adjustments
+     * take effect within 2-5 seconds (Sonos network buffer drain time).
+     *
      * @param inputPath   Source audio file
-     * @param eq          Parametric EQ (thread-safe: uses a fresh filter state copy)
+     * @param liveEq      Shared parametric EQ — read live for real-time parameter changes
      * @param output      Output stream (typically piped to HTTP response)
      * @param seekToUs    Seek to this position before processing (for Range requests)
      * @param skipBytes   Skip this many WAV data bytes from the start of output
@@ -70,7 +74,7 @@ object AudioProcessor {
      */
     fun streamProcess(
         inputPath: String,
-        eq: ParametricEQ,
+        liveEq: ParametricEQ,
         output: OutputStream,
         seekToUs: Long = 0,
         skipBytes: Long = 0
@@ -104,9 +108,10 @@ object AudioProcessor {
                 format.getLong(MediaFormat.KEY_DURATION) else 0L
             val mime = format.getString(MediaFormat.KEY_MIME)!!
 
-            // Create a fresh EQ filter state for this stream (thread-safe)
+            // Local EQ with correct sample rate — syncs from liveEq on version changes
             val streamEq = ParametricEQ(sampleRate)
-            streamEq.loadFromJson(eq.toJson())
+            var lastEqVersion = liveEq.version
+            syncEqParams(streamEq, liveEq)
 
             // Seek if needed
             if (seekToUs > 0) {
@@ -155,6 +160,14 @@ object AudioProcessor {
                     }
 
                     if (bufInfo.size > 0) {
+                        // Check for live EQ changes before processing this buffer
+                        val currentVersion = liveEq.version
+                        if (currentVersion != lastEqVersion) {
+                            syncEqParams(streamEq, liveEq)
+                            lastEqVersion = currentVersion
+                            Log.d(TAG, "Live EQ updated (v$currentVersion) mid-stream")
+                        }
+
                         val outBuf = codec.getOutputBuffer(outIdx)!!
                         outBuf.position(bufInfo.offset)
                         outBuf.limit(bufInfo.offset + bufInfo.size)
@@ -209,6 +222,30 @@ object AudioProcessor {
             Log.e(TAG, "Stream processing failed: ${e.message}", e)
         } finally {
             extractor.release()
+        }
+    }
+
+    /**
+     * Sync local stream EQ from the shared live EQ.
+     * Copies band parameters and recomputes coefficients at the stream's sample rate.
+     * Filter delay lines are reset (may cause a tiny click — inaudible in practice).
+     */
+    private fun syncEqParams(streamEq: ParametricEQ, liveEq: ParametricEQ) {
+        val params = liveEq.getBandsSnapshot()
+        streamEq.bypass = liveEq.bypass
+        // Rebuild bands with correct sample rate coefficients
+        val currentBands = streamEq.getBands()
+        // Update existing bands, add/remove as needed
+        for (i in params.indices) {
+            if (i < currentBands.size) {
+                streamEq.updateBand(i, params[i])
+            } else {
+                streamEq.addBand(params[i])
+            }
+        }
+        // Remove extra bands
+        while (streamEq.getBandCount() > params.size) {
+            streamEq.removeBand(streamEq.getBandCount() - 1)
         }
     }
 

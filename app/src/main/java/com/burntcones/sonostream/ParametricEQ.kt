@@ -17,6 +17,7 @@ class ParametricEQ(private val sampleRate: Int = 44100) {
         private const val PREFS_NAME = "eq_settings"
         private const val PREFS_KEY_BANDS = "bands"
         private const val PREFS_KEY_BYPASS = "bypass"
+        private val versionCounter = java.util.concurrent.atomic.AtomicLong(0)
 
         /** Logarithmically spaced frequency points for UI curve (20Hz–20kHz). */
         val UI_FREQUENCIES: FloatArray by lazy {
@@ -29,12 +30,20 @@ class ParametricEQ(private val sampleRate: Int = 44100) {
         }
     }
 
+    /** Monotonically increasing version — changes on any band/bypass modification. */
+    @Volatile var version: Long = versionCounter.incrementAndGet()
+        private set
+
     private val bands = mutableListOf<BiquadFilter>()
 
     // Per-channel filter instances for proper stereo processing
     private val bandsR = mutableListOf<BiquadFilter>()
 
     var bypass = false
+        set(value) {
+            field = value
+            version = versionCounter.incrementAndGet()
+        }
 
     init {
         resetToDefaults()
@@ -43,6 +52,7 @@ class ParametricEQ(private val sampleRate: Int = 44100) {
     fun resetToDefaults() {
         bands.clear()
         bandsR.clear()
+        version = versionCounter.incrementAndGet()
         addBand(BiquadParams(80f, 0f, 0.7f, FilterType.LOW_SHELF))
         addBand(BiquadParams(400f, 0f, 1.0f, FilterType.BELL))
         addBand(BiquadParams(2500f, 0f, 1.0f, FilterType.BELL))
@@ -59,6 +69,7 @@ class ParametricEQ(private val sampleRate: Int = 44100) {
         val filterR = BiquadFilter().apply { configure(params, sampleRate) }
         bands.add(filterL)
         bandsR.add(filterR)
+        version = versionCounter.incrementAndGet()
         return true
     }
 
@@ -66,6 +77,7 @@ class ParametricEQ(private val sampleRate: Int = 44100) {
         if (index < 0 || index >= bands.size) return false
         bands.removeAt(index)
         bandsR.removeAt(index)
+        version = versionCounter.incrementAndGet()
         return true
     }
 
@@ -73,6 +85,7 @@ class ParametricEQ(private val sampleRate: Int = 44100) {
         if (index < 0 || index >= bands.size) return
         bands[index].configure(params, sampleRate)
         bandsR[index].configure(params, sampleRate)
+        version = versionCounter.incrementAndGet()
     }
 
     /**
@@ -194,7 +207,11 @@ class ParametricEQ(private val sampleRate: Int = 44100) {
             )
             addBand(params)
         }
+        version = versionCounter.incrementAndGet()
     }
+
+    /** Thread-safe snapshot of current band parameters (for cross-thread sync). */
+    @Synchronized fun getBandsSnapshot(): List<BiquadParams> = bands.map { it.params.copy() }
 
     /** Frequency response as JSON array for the UI curve endpoint. */
     fun responseToJson(): JSONObject = JSONObject().apply {

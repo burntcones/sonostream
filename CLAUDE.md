@@ -1,13 +1,13 @@
 # SonoStream Android — Project Context
 
 ## What This Is
-Android app for Burnt Cones cafes (Singapore) that streams local audio files from an Android tablet to Sonos speakers via UPnP/DLNA, bypassing the Sonos app. Also supports Bluetooth/system audio via "This Device" speaker option. Includes a parametric EQ (not yet working) and a media notification mini player (not yet working).
+Android app for Burnt Cones cafes (Singapore) that streams local audio files from an Android tablet to Sonos speakers via UPnP/DLNA, bypassing the Sonos app. Also supports Bluetooth/system audio via "This Device" speaker option. Includes a live streaming parametric EQ and a media notification mini player with playback controls.
 
 ## Architecture
 - **Kotlin Android app** with WebView UI (single `ui.html` served by embedded HTTP server)
 - **NanoHTTPD** embedded HTTP server on port 8077 — serves the web UI, REST API, and audio files
-- **MediaSession** integration for notification shade playback controls (implemented but not working — see open bugs)
-- **DSP engine** — biquad filter chain for parametric EQ with streaming decode → EQ → WAV pipe (implemented but not working — see open bugs)
+- **MediaSession** integration for notification shade playback controls (play/pause/stop via direct SOAP calls)
+- **DSP engine** — biquad filter chain for live parametric EQ with streaming decode → EQ → WAV pipe (parameters update mid-stream)
 - **LocalPlayer.kt** — Android MediaPlayer wrapper for Bluetooth/built-in speaker playback
 - **UpdateChecker.kt** — OTA update system fetching from GitHub (routes over internet-capable network)
 
@@ -17,8 +17,8 @@ Android app for Burnt Cones cafes (Singapore) that streams local audio files fro
 3. Audio files served over HTTP; Sonos fetches from phone's IP
 4. Control via UPnP SOAP: SetAVTransportURI → Play, Pause, Stop, SetVolume, Seek
 5. WiFi process binding via `bindProcessToNetwork` to ensure SOAP calls route over WiFi (not cellular)
-6. EQ (intended): when EQ is active, audio is decoded (MediaCodec), processed through biquad filters, and streamed as WAV via PipedInputStream to the HTTP response. Currently broken — see open bugs.
-7. MediaSession pushes playback state to Android notification shade (track title, controls, progress). Currently broken — see open bugs.
+6. EQ: audio is always decoded (MediaCodec), processed through biquad filters with live parameter updates, and streamed as WAV via PipedInputStream. EQ changes take effect within 2-5s (Sonos buffer drain).
+7. MediaSession pushes playback state to Android notification shade (track title, controls, progress). Media callbacks call SonosManager directly (not via HTTP loopback).
 
 ## Key Discoveries (Resolved)
 
@@ -37,43 +37,31 @@ Sonos `friendlyName` contains IP + model + RINCON UUID. Use `roomName` element i
 ### Nested Device XML
 Sonos nests AVTransport/RenderingControl inside a sub-device (MediaRenderer) under `deviceList`. Must use `getElementsByTagName("service")` to search ALL nested devices.
 
+## Key Discoveries (v1.6.0)
+
+### Live Streaming EQ Architecture
+The original EQ approach (snapshot parameters → restart track → hope Sonos re-fetches same URL) was fundamentally broken. Sonos cached the URL and never re-fetched. The new architecture:
+- Audio is ALWAYS decoded through the EQ path (MediaCodec → biquad EQ → WAV stream)
+- The processing thread reads EQ parameters LIVE from the shared `ApiServer.eq` object via a version counter
+- On each output buffer (~10ms), it checks `liveEq.version`; if changed, reloads band params and recomputes coefficients at the stream's sample rate
+- EQ changes take effect within 2-5 seconds (Sonos network buffer drain time)
+- At 0dB gain, biquad filters are transparent (H(z)=1), so no quality loss when EQ is flat
+- Trade-off: WAV bandwidth (~1.6 Mbps for a 5-hour stereo file) vs original MP3. Fine for local WiFi.
+
+### Media Notification Controls — Loopback Blocked by WiFi Binding
+`bindProcessToNetwork(wifiNetwork)` blocks loopback HTTP connections to 127.0.0.1. The original media callbacks used HTTP POST to the local API server, which silently failed. **Fix**: call `SonosManager.transportAction()` directly from the callbacks. Also added logging to all catch blocks (previously all exceptions were swallowed).
+
+### EQ Tap Popup — Touch Threshold
+On touchscreens, even slight finger movement during a tap set `eqDragMoved = true`, preventing the Q/type edit popup from ever opening. **Fix**: 8px movement threshold — movement below this counts as a tap.
+
 ## Open Bugs (Priority Order)
 
-### 1. Streaming Parametric EQ Not Working
-**Status:** Implemented but produces no audible difference. Needs systematic debugging with real device evidence.
-**Architecture:** When EQ is active (`serveEqAudio` in ApiServer.kt), the server:
-1. Probes source file for sample rate/channels/duration
-2. Estimates WAV output size
-3. Creates PipedInputStream/PipedOutputStream
-4. Spawns a thread that decodes via MediaExtractor+MediaCodec → applies biquad EQ → writes PCM16 WAV to pipe
-5. NanoHTTPD serves the pipe as the HTTP response
-6. After EQ band changes, UI calls `applyEqToSpeaker()` which re-sends the track to Sonos (1.5s debounce)
-
-**What needs investigation (use /systematic-debugging):**
-- Does the streaming pipe actually produce audio data? (Check with `adb logcat -s AudioProcessor`)
-- Does Sonos successfully fetch and play the piped WAV stream? (Check SOAP logs in debug panel)
-- Does MediaCodec successfully decode the MP3 on the tablet? (Some codecs may fail)
-- Is the PipedInputStream/PipedOutputStream pattern working correctly with NanoHTTPD's threading model?
-- Does the re-send (`applyEqToSpeaker`) actually trigger Sonos to re-fetch? (Check if "EQ applied" toast appears)
-- Is there a timing issue where NanoHTTPD closes the pipe before the processing thread starts?
-
-**Key files:** `AudioProcessor.kt` (streamProcess), `ApiServer.kt` (serveEqAudio), `ui.html` (applyEqToSpeaker)
-
-### 2. Media Notification Controls Not Working
-**Status:** Implemented but controls in notification shade don't respond. Needs investigation.
-**Architecture:** StreamerService creates a MediaSessionCompat with callbacks for onPlay/onPause/onStop/onSkipToNext/onSkipToPrevious. Media buttons are routed via HTTP POST to the local API server (for play/pause/stop) or via WebView JS bridge (for next/prev). Notification is built with MediaStyle + transport actions.
-**What needs investigation:**
-- Do the notification buttons appear at all? (MediaStyle may require specific icon drawables)
-- Do the callbacks fire? (Add logging to StreamerService media session callbacks)
-- The play/pause callbacks make HTTP calls to `127.0.0.1:8077/api/control` — does `bindProcessToNetwork(wifiNetwork)` block loopback connections?
-- The next/prev callbacks use `MainActivity.instance?.evaluateJs("playNext(1)")` — does this work when the activity is in the background?
-- Is `MediaButtonReceiver.handleIntent()` receiving intents correctly?
-
-**Key files:** `StreamerService.kt` (MediaSession setup, callbacks, notification), `MainActivity.kt` (evaluateJs bridge, MediaBridge)
-
-### 3. "Lost Connection" Toast Still Appears Occasionally
+### 1. "Lost Connection" Toast Still Appears Occasionally
 **Status:** Improved but not fully resolved.
 **What was done:** Changed from `setInterval` to chained `setTimeout` (no overlapping polls), reduced SOAP timeouts to 2s, raised failure threshold to 5.
+
+### 2. Next/Prev from Notification May Not Work When Backgrounded
+**Status:** Known limitation. `onSkipToNext`/`onSkipToPrevious` use `MainActivity.evaluateJs("playNext()")` which requires the WebView to be active. When the activity is destroyed by the OS, this fails. Fix would require tracking the playlist queue on the Kotlin side.
 
 ## Build
 ```bash
@@ -88,7 +76,7 @@ export ANDROID_HOME="$HOME/Library/Android/sdk"
 - Repo: github.com/burntcones/sonostream (public)
 - `gh` CLI is authenticated as `burntcones`
 - OTA manifest: `update.json` in repo root (raw URL: `https://raw.githubusercontent.com/burntcones/sonostream/main/update.json`)
-- Current version: versionCode 9, versionName 1.5.0
+- Current version: versionCode 10, versionName 1.6.0
 
 ## OTA Update Workflow
 1. Bump `versionCode` and `versionName` in `app/build.gradle`
