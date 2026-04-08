@@ -1,2 +1,2 @@
-rootProject.name = 'SonoStream'
+rootProject.name = 'Aux'
 include ':app'

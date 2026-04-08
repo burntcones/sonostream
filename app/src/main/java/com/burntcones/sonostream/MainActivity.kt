@@ -49,7 +49,7 @@ class MainActivity : AppCompatActivity() {
 
         // Acquire multicast lock so we can receive SSDP responses
         val wifi = applicationContext.getSystemService(WIFI_SERVICE) as WifiManager
-        multicastLock = wifi.createMulticastLock("sonostream").apply {
+        multicastLock = wifi.createMulticastLock("aux").apply {
             setReferenceCounted(true)
             acquire()
         }

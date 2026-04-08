@@ -1,6 +1,6 @@
 {
-  "versionCode": 15,
-  "versionName": "1.8.1",
-  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v1.8.1/sonostream.apk",
-  "releaseNotes": "Unified equalizer icon across launcher, notification, and web UI"
+  "versionCode": 16,
+  "versionName": "2.0.0",
+  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v2.0.0/sonostream.apk",
+  "releaseNotes": "Renamed to Aux"
 }

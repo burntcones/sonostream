@@ -1,4 +1,4 @@
-# SonoStream Android — Project Context
+# Aux — Project Context
 
 ## What This Is
 Android app for Burnt Cones cafes (Singapore) that streams local audio files from an Android tablet to Sonos speakers via UPnP/DLNA, bypassing the Sonos app. Also supports Bluetooth/system audio via "This Device" speaker option. Includes a live streaming parametric EQ and a media notification mini player with playback controls.
@@ -83,7 +83,7 @@ export ANDROID_HOME="$HOME/Library/Android/sdk"
 - Repo: github.com/burntcones/sonostream (public)
 - `gh` CLI is authenticated as `burntcones`
 - OTA manifest: `update.json` in repo root (raw URL: `https://raw.githubusercontent.com/burntcones/sonostream/main/update.json`)
-- Current version: versionCode 14, versionName 1.8.0
+- Current version: versionCode 16, versionName 2.0.0
 
 ## OTA Update Workflow
 1. Bump `versionCode` and `versionName` in `app/build.gradle`

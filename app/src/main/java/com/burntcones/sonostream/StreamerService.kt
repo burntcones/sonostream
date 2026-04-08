@@ -24,7 +24,7 @@ class StreamerService : Service() {
 
     companion object {
         private const val TAG = "StreamerService"
-        private const val CHANNEL_ID = "sonostream_channel"
+        private const val CHANNEL_ID = "aux_channel"
         private const val NOTIFICATION_ID = 1
 
         // Singleton reference so ApiServer/UI can update playback state
@@ -41,7 +41,7 @@ class StreamerService : Service() {
 
         // Keep CPU awake so HTTP server can serve audio while screen is off
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "sonostream:server").apply {
+        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "aux:server").apply {
             acquire()
         }
 
@@ -51,7 +51,7 @@ class StreamerService : Service() {
             WifiManager.WIFI_MODE_FULL_LOW_LATENCY
         else
             @Suppress("DEPRECATION") WifiManager.WIFI_MODE_FULL_HIGH_PERF
-        wifiLock = wifi.createWifiLock(wifiMode, "sonostream:wifi").apply {
+        wifiLock = wifi.createWifiLock(wifiMode, "aux:wifi").apply {
             acquire()
         }
 
@@ -65,7 +65,7 @@ class StreamerService : Service() {
     }
 
     private fun setupMediaSession() {
-        mediaSession = MediaSessionCompat(this, "SonoStream").apply {
+        mediaSession = MediaSessionCompat(this, "Aux").apply {
             // Handle media button events (play/pause from notification, headphones, etc.)
             // Uses direct SonosManager calls — NOT HTTP to 127.0.0.1, which fails
             // because bindProcessToNetwork(wifiNetwork) blocks loopback connections.
@@ -180,7 +180,7 @@ class StreamerService : Service() {
         session.setMetadata(MediaMetadataCompat.Builder()
             .putString(MediaMetadataCompat.METADATA_KEY_TITLE, trackTitle)
             .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, speakerName)
-            .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, "SonoStream")
+            .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, "Aux")
             .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, durationMs)
             .build())
 
@@ -205,7 +205,7 @@ class StreamerService : Service() {
     }
 
     private fun buildNotification(
-        trackTitle: String = "SonoStream",
+        trackTitle: String = "Aux",
         speakerName: String = "Ready",
         isPlaying: Boolean = false
     ): Notification {

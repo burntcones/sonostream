@@ -129,7 +129,7 @@ object UpdateChecker {
         return try {
             val updateDir = File(activity.cacheDir, "updates")
             updateDir.mkdirs()
-            val apkFile = File(updateDir, "sonostream-update.apk")
+            val apkFile = File(updateDir, "aux-update.apk")
             if (apkFile.exists()) apkFile.delete()
 
             Log.d(TAG, "Downloading APK from $apkUrl")
