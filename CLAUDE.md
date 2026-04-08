@@ -8,7 +8,7 @@ Android app for Burnt Cones cafes (Singapore) that streams local audio files fro
 - **NanoHTTPD** embedded HTTP server on port 8077 — serves the web UI, REST API, and audio files
 - **MediaSession** integration for notification shade playback controls (play/pause/stop via direct SOAP calls)
 - **DSP engine** — biquad filter chain for live parametric EQ with streaming decode → EQ → WAV pipe (parameters update mid-stream)
-- **LocalPlayer.kt** — Android MediaPlayer wrapper for Bluetooth/built-in speaker playback
+- **LocalPlayer.kt** — AudioTrack + MediaCodec decode with live biquad EQ for Bluetooth/built-in speaker playback
 - **UpdateChecker.kt** — OTA update system fetching from GitHub (routes over internet-capable network)
 
 ## How It Works
@@ -17,8 +17,9 @@ Android app for Burnt Cones cafes (Singapore) that streams local audio files fro
 3. Audio files served over HTTP; Sonos fetches from phone's IP
 4. Control via UPnP SOAP: SetAVTransportURI → Play, Pause, Stop, SetVolume, Seek
 5. WiFi process binding via `bindProcessToNetwork` to ensure SOAP calls route over WiFi (not cellular)
-6. EQ: audio is always decoded (MediaCodec), processed through biquad filters with live parameter updates, and streamed as WAV via PipedInputStream. EQ changes take effect within 2-5s (Sonos buffer drain).
+6. EQ: audio is always decoded (MediaCodec), processed through biquad filters with live parameter updates. For Sonos: streamed as WAV via PipedInputStream (changes take effect within 2-5s due to Sonos buffer). For local playback: decoded to AudioTrack with ~10ms EQ latency.
 7. MediaSession pushes playback state to Android notification shade (track title, controls, progress). Media callbacks call SonosManager directly (not via HTTP loopback).
+8. EQ touch interaction: single-finger drag for freq/gain, two-finger pinch for Q, tap for popup (filter type/enable/delete).
 
 ## Key Discoveries (Resolved)
 
@@ -54,6 +55,12 @@ The original EQ approach (snapshot parameters → restart track → hope Sonos r
 ### EQ Tap Popup — Touch Threshold
 On touchscreens, even slight finger movement during a tap set `eqDragMoved = true`, preventing the Q/type edit popup from ever opening. **Fix**: 8px movement threshold — movement below this counts as a tap.
 
+### LocalPlayer Must Use AudioTrack, Not MediaPlayer
+Android's `MediaPlayer` plays files directly through its own decode pipeline, completely bypassing the app's EQ filters. **Fix**: Rewrote `LocalPlayer` to use `AudioTrack` + `MediaCodec` decode + live biquad EQ — same processing chain as Sonos streaming but writing to AudioTrack instead of HTTP response. EQ changes take effect within ~10ms on local playback.
+
+### EQ Touch UX — Pinch-to-Q
+Standard pro-EQ interaction pattern: single-finger drag for freq/gain, two-finger pinch for Q (spread = wide/low Q, pinch = narrow/high Q). Implemented using PointerEvent multi-touch tracking with a `Map<pointerId, {x, y}>`. Q mapping: `newQ = refQ * (refDist / currentDist)`. Visual feedback: horizontal bar shows bandwidth, floating label shows live values, nodes enlarge while dragging.
+
 ## Open Bugs (Priority Order)
 
 ### 1. "Lost Connection" Toast Still Appears Occasionally
@@ -76,7 +83,7 @@ export ANDROID_HOME="$HOME/Library/Android/sdk"
 - Repo: github.com/burntcones/sonostream (public)
 - `gh` CLI is authenticated as `burntcones`
 - OTA manifest: `update.json` in repo root (raw URL: `https://raw.githubusercontent.com/burntcones/sonostream/main/update.json`)
-- Current version: versionCode 10, versionName 1.6.0
+- Current version: versionCode 14, versionName 1.8.0
 
 ## OTA Update Workflow
 1. Bump `versionCode` and `versionName` in `app/build.gradle`
@@ -101,12 +108,12 @@ Long-press the app logo (1.5s) to open the debug panel. Shows:
 | `StreamerService.kt` | Foreground service, MediaSession, media notification, wake lock, WiFi lock, starts ApiServer |
 | `ApiServer.kt` | NanoHTTPD routes: speakers, files, play, volume, control, seek, EQ, local/*, multi, sonos-eq endpoints |
 | `SonosManager.kt` | SSDP discovery, subnet scan, ZoneGroupTopology groups, UPnP SOAP control (incl. SetEQ/GetEQ), SOAP log ring buffer |
-| `LocalPlayer.kt` | Android MediaPlayer wrapper for BT/built-in audio |
+| `LocalPlayer.kt` | AudioTrack + MediaCodec decode with live EQ for BT/built-in audio |
 | `UpdateChecker.kt` | Fetches update.json from GitHub (via internet-capable network), downloads APK, triggers install |
 | `BiquadFilter.kt` | Single biquad IIR filter section — RBJ cookbook formulas, 5 filter types, frequency response calc |
 | `ParametricEQ.kt` | N-band parametric EQ manager — band CRUD, cascade processing, JSON serialization, SharedPreferences persistence |
 | `AudioProcessor.kt` | Streaming audio processor: MediaCodec decode → EQ biquad chain → WAV stream via PipedOutputStream |
-| `ui.html` | Single-page web UI: speaker picker, file browser, player bar, parametric EQ canvas with tap-to-edit popup, toasts, debug panel |
+| `ui.html` | Single-page web UI: speaker picker, file browser, player bar, parametric EQ canvas with drag+pinch touch controls, toasts, debug panel |
 | `update.json` | OTA manifest (versionCode, apkUrl, releaseNotes) |
 
 ## API Endpoints
