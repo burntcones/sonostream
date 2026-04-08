@@ -195,7 +195,9 @@ class ApiServer(
                 } else {
                     val localIp = getLocalIp()
                     val port = listeningPort
-                    val audioUri = "http://$localIp:$port/audio/${java.net.URLEncoder.encode(filePath, "UTF-8").replace("+", "%20")}"
+                    val eqSuffix = if (!eq.bypass && eq.getBands().any { it.enabled && it.gainDb != 0f })
+                        "?eq=${eq.settingsHash()}" else ""
+                    val audioUri = "http://$localIp:$port/audio/${java.net.URLEncoder.encode(filePath, "UTF-8").replace("+", "%20")}$eqSuffix"
                     val title = File(filePath).nameWithoutExtension
                     val ok = SonosManager.playUri(sp, audioUri, title)
                     jsonResponse(JSONObject().put("success", ok))
@@ -355,7 +357,9 @@ class ApiServer(
                 } else {
                     val localIp = getLocalIp()
                     val port = listeningPort
-                    val audioUri = "http://$localIp:$port/audio/${java.net.URLEncoder.encode(filePath, "UTF-8").replace("+", "%20")}"
+                    val eqSuffix = if (!eq.bypass && eq.getBands().any { it.enabled && it.gainDb != 0f })
+                        "?eq=${eq.settingsHash()}" else ""
+                    val audioUri = "http://$localIp:$port/audio/${java.net.URLEncoder.encode(filePath, "UTF-8").replace("+", "%20")}$eqSuffix"
                     val title = File(filePath).nameWithoutExtension
                     val results = JSONObject()
                     for (i in 0 until speakerNames.length()) {
