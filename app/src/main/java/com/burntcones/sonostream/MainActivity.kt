@@ -33,6 +33,7 @@ class MainActivity : AppCompatActivity() {
             setBackgroundColor(0xFF0A0A0A.toInt())
             webViewClient = WebViewClient()
             webChromeClient = WebChromeClient()
+            addJavascriptInterface(UpdateBridge(this@MainActivity), "NativeUpdate")
         }
         setContentView(webView)
 
@@ -78,13 +79,12 @@ class MainActivity : AppCompatActivity() {
                 startServer()
             } else {
                 Toast.makeText(this, "Storage permission is required to access music files", Toast.LENGTH_LONG).show()
-                startServer() // Start anyway, will show empty file list
+                startServer()
             }
         }
     }
 
     private fun startServer() {
-        // Start foreground service
         val intent = Intent(this, StreamerService::class.java)
         if (Build.VERSION.SDK_INT >= 26) {
             startForegroundService(intent)
@@ -92,12 +92,12 @@ class MainActivity : AppCompatActivity() {
             startService(intent)
         }
 
-        // Load the UI once server is ready
         webView.postDelayed({
             webView.loadUrl("http://127.0.0.1:$SERVER_PORT")
         }, 800)
     }
 
+    @Suppress("DEPRECATION")
     override fun onBackPressed() {
         if (webView.canGoBack()) {
             webView.goBack()
@@ -109,5 +109,35 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         multicastLock?.release()
         super.onDestroy()
+    }
+
+    /**
+     * JavaScript bridge for OTA updates.
+     * Called from WebView via window.NativeUpdate.downloadAndInstall(apkUrl)
+     */
+    class UpdateBridge(private val activity: MainActivity) {
+
+        @JavascriptInterface
+        fun downloadAndInstall(apkUrl: String) {
+            Thread {
+                activity.runOnUiThread {
+                    Toast.makeText(activity, "Downloading update…", Toast.LENGTH_SHORT).show()
+                }
+                val apkFile = UpdateChecker.downloadApk(activity, apkUrl) { progress ->
+                    activity.runOnUiThread {
+                        activity.webView.evaluateJavascript(
+                            "if(window._updateProgress) window._updateProgress($progress)", null
+                        )
+                    }
+                }
+                activity.runOnUiThread {
+                    if (apkFile != null) {
+                        UpdateChecker.installApk(activity, apkFile)
+                    } else {
+                        Toast.makeText(activity, "Update download failed", Toast.LENGTH_LONG).show()
+                    }
+                }
+            }.start()
+        }
     }
 }

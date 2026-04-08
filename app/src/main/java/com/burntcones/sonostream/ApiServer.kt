@@ -51,6 +51,32 @@ class ApiServer(
                     })
                 }
 
+                method == Method.GET && uri == "/api/version" -> {
+                    val pInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+                    val versionCode = if (android.os.Build.VERSION.SDK_INT >= 28)
+                        pInfo.longVersionCode.toInt() else @Suppress("DEPRECATION") pInfo.versionCode
+                    jsonResponse(JSONObject().apply {
+                        put("versionCode", versionCode)
+                        put("versionName", pInfo.versionName)
+                    })
+                }
+
+                method == Method.GET && uri == "/api/check-update" -> {
+                    val pInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+                    val versionCode = if (android.os.Build.VERSION.SDK_INT >= 28)
+                        pInfo.longVersionCode.toInt() else @Suppress("DEPRECATION") pInfo.versionCode
+                    val update = UpdateChecker.checkForUpdate(versionCode)
+                    jsonResponse(JSONObject().apply {
+                        put("available", update != null)
+                        put("current_version", pInfo.versionName)
+                        if (update != null) {
+                            put("new_version", update.versionName)
+                            put("apk_url", update.apkUrl)
+                            put("release_notes", update.releaseNotes)
+                        }
+                    })
+                }
+
                 method == Method.GET && uri == "/api/files" -> {
                     val files = scanAudioFiles()
                     jsonResponse(JSONObject().apply {

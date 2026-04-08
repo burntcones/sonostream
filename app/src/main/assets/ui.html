@@ -647,12 +647,53 @@ html, body {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.5; }
 }
+/* ── Update Banner ── */
+.update-banner {
+  display: none;
+  padding: 10px 20px;
+  background: linear-gradient(135deg, var(--accent), #e05a1f);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.15s;
+  flex-shrink: 0;
+  text-align: center;
+}
+
+.update-banner.visible { display: block; }
+.update-banner:active { opacity: 0.8; }
+.update-banner .update-version { font-weight: 700; }
+.update-banner .update-progress { display: none; margin-top: 4px; }
+.update-banner .update-progress-bar {
+  height: 3px;
+  background: rgba(255,255,255,0.3);
+  border-radius: 2px;
+  margin-top: 6px;
+  overflow: hidden;
+}
+.update-banner .update-progress-fill {
+  height: 100%;
+  background: #fff;
+  width: 0%;
+  transition: width 0.3s;
+}
+
 .playing-pulse { animation: pulse 1.5s ease-in-out infinite; }
 </style>
 </head>
 <body>
 <div class="toast-container" id="toastContainer"></div>
 <div class="app" id="app">
+
+  <!-- Update Banner -->
+  <div class="update-banner" id="updateBanner">
+    Update available: <span class="update-version" id="updateVersion"></span>
+    <span id="updateAction"> — Tap to install</span>
+    <div class="update-progress" id="updateProgress">
+      <div class="update-progress-bar"><div class="update-progress-fill" id="updateProgressFill"></div></div>
+    </div>
+  </div>
 
   <!-- Header -->
   <div class="header">
@@ -1215,11 +1256,46 @@ function stopPolling() {
 }
 
 // ─── Init ───────────────────────────────────────────────────────────────────
+// ─── OTA Update ────────────────────────────────────────────────────────────
+let pendingApkUrl = null;
+
+async function checkForUpdate() {
+  try {
+    const data = await api('GET', '/api/check-update');
+    if (data.available) {
+      pendingApkUrl = data.apk_url;
+      $('updateVersion').textContent = 'v' + data.new_version;
+      $('updateBanner').classList.add('visible');
+    }
+  } catch (e) { /* silent — update check is non-critical */ }
+}
+
+$('updateBanner').addEventListener('click', () => {
+  if (!pendingApkUrl) return;
+  if (typeof window.NativeUpdate !== 'undefined') {
+    $('updateAction').textContent = ' — Downloading…';
+    $('updateProgress').style.display = 'block';
+    window.NativeUpdate.downloadAndInstall(pendingApkUrl);
+  } else {
+    // Fallback: open URL in browser
+    window.open(pendingApkUrl, '_blank');
+  }
+});
+
+// Progress callback from native bridge
+window._updateProgress = function(pct) {
+  $('updateProgressFill').style.width = pct + '%';
+  if (pct >= 100) $('updateAction').textContent = ' — Installing…';
+};
+
+// ─── Init ───────────────────────────────────────────────────────────────────
 (async function init() {
   // Auto-discover speakers on first launch (not just load empty list)
   await rescanSpeakers();
   await loadFiles();
   if (selectedSpeaker) startPolling();
+  // Check for updates after UI is loaded (non-blocking)
+  setTimeout(checkForUpdate, 3000);
 })();
 </script>
 </body>
