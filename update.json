@@ -1,6 +1,6 @@
 {
   "versionCode": 8,
   "versionName": "1.4.0",
-  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v1.4.0/app-debug.apk",
+  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v1.4.0/sonostream.apk",
   "releaseNotes": "Media notification mini player with playback controls"
 }
