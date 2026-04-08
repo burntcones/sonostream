@@ -398,46 +398,52 @@ object SonosManager {
             val doc = DocumentBuilderFactory.newInstance().newDocumentBuilder()
                 .parse(xml.byteInputStream())
 
+            // Get name, model, UUID from the root device (first <device>)
             val devices = doc.getElementsByTagName("device")
             if (devices.length == 0) return null
-            val device = devices.item(0)
+            val rootDevice = devices.item(0)
 
             var name = ""
             var model = ""
-            var controlUrl = ""
-            var renderingUrl = "/MediaRenderer/RenderingControl/Control"
             var uuid = ""
 
-            for (i in 0 until device.childNodes.length) {
-                val child = device.childNodes.item(i)
+            for (i in 0 until rootDevice.childNodes.length) {
+                val child = rootDevice.childNodes.item(i)
                 when (child.nodeName) {
                     "friendlyName" -> name = child.textContent ?: ""
                     "modelName" -> model = child.textContent ?: ""
-                    "UDN" -> {
-                        val udn = child.textContent ?: ""
-                        uuid = udn.removePrefix("uuid:")
-                    }
-                    "serviceList" -> {
-                        for (j in 0 until child.childNodes.length) {
-                            val svc = child.childNodes.item(j)
-                            if (svc.nodeName != "service") continue
-                            var svcType = ""
-                            var svcCtrl = ""
-                            for (k in 0 until svc.childNodes.length) {
-                                val s = svc.childNodes.item(k)
-                                when (s.nodeName) {
-                                    "serviceType" -> svcType = s.textContent ?: ""
-                                    "controlURL" -> svcCtrl = s.textContent ?: ""
-                                }
-                            }
-                            if ("AVTransport" in svcType) controlUrl = svcCtrl
-                            if ("RenderingControl" in svcType) renderingUrl = svcCtrl
-                        }
-                    }
+                    "UDN" -> uuid = (child.textContent ?: "").removePrefix("uuid:")
                 }
             }
 
-            if (controlUrl.isEmpty()) return null
+            // Search ALL <service> elements across ALL nested devices for
+            // AVTransport and RenderingControl. Sonos puts these in a
+            // sub-device (MediaRenderer) under deviceList, not the root device.
+            var controlUrl = ""
+            var renderingUrl = "/MediaRenderer/RenderingControl/Control"
+
+            val services = doc.getElementsByTagName("service")
+            for (i in 0 until services.length) {
+                val svc = services.item(i)
+                var svcType = ""
+                var svcCtrl = ""
+                for (j in 0 until svc.childNodes.length) {
+                    val s = svc.childNodes.item(j)
+                    when (s.nodeName) {
+                        "serviceType" -> svcType = s.textContent ?: ""
+                        "controlURL" -> svcCtrl = s.textContent ?: ""
+                    }
+                }
+                if ("AVTransport" in svcType) controlUrl = svcCtrl
+                if ("RenderingControl" in svcType) renderingUrl = svcCtrl
+            }
+
+            Log.d(TAG, "Parsed device: name=$name model=$model uuid=${uuid.take(12)} controlUrl=$controlUrl")
+
+            if (controlUrl.isEmpty()) {
+                Log.w(TAG, "No AVTransport service found in device XML at $location")
+                return null
+            }
 
             SonosSpeaker(
                 name = name,
@@ -450,7 +456,7 @@ object SonosManager {
                 uuid = uuid
             )
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e(TAG, "fetchDeviceInfo failed for $location: ${e.message}")
             null
         }
     }
