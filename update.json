@@ -1,6 +1,6 @@
 {
-  "versionCode": 14,
-  "versionName": "1.8.0",
-  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v1.8.0/sonostream.apk",
-  "releaseNotes": "Pro EQ touch: drag band for freq/gain, pinch for Q, floating readout, larger canvas"
+  "versionCode": 15,
+  "versionName": "1.8.1",
+  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v1.8.1/sonostream.apk",
+  "releaseNotes": "Unified equalizer icon across launcher, notification, and web UI"
 }
