@@ -463,7 +463,7 @@ object SonosManager {
 
     // ── UPnP SOAP ───────────────────────────────────────────────────────
 
-    private fun soap(speaker: SonosSpeaker, serviceUrl: String, serviceType: String, action: String, argsXml: String = ""): Pair<Int, String> {
+    private fun soap(speaker: SonosSpeaker, serviceUrl: String, serviceType: String, action: String, argsXml: String = "", timeoutMs: Int = 5000): Pair<Int, String> {
         return try {
             val body = """<?xml version="1.0" encoding="utf-8"?>
 <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
@@ -473,8 +473,8 @@ object SonosManager {
             val url = URL("http://${speaker.ip}:${speaker.port}$serviceUrl")
             val conn = url.openConnection() as HttpURLConnection
             conn.requestMethod = "POST"
-            conn.connectTimeout = 5000
-            conn.readTimeout = 5000
+            conn.connectTimeout = timeoutMs
+            conn.readTimeout = timeoutMs
             conn.setRequestProperty("Content-Type", """text/xml; charset="utf-8"""")
             conn.setRequestProperty("SOAPACTION", """"$serviceType#$action"""")
             conn.doOutput = true
@@ -522,7 +522,7 @@ object SonosManager {
 
     fun getVolume(speaker: SonosSpeaker): Int {
         val args = "<InstanceID>0</InstanceID><Channel>Master</Channel>"
-        val (status, data) = soap(speaker, speaker.renderingUrl, RC, "GetVolume", args)
+        val (status, data) = soap(speaker, speaker.renderingUrl, RC, "GetVolume", args, timeoutMs = 2000)
         if (status == 200) {
             val m = Pattern.compile("<CurrentVolume>(\\d+)</CurrentVolume>").matcher(data)
             if (m.find()) return m.group(1)!!.toInt()
@@ -531,7 +531,7 @@ object SonosManager {
     }
 
     fun getTransportInfo(speaker: SonosSpeaker): String {
-        val (status, data) = soap(speaker, speaker.controlUrl, AVT, "GetTransportInfo", "<InstanceID>0</InstanceID>")
+        val (status, data) = soap(speaker, speaker.controlUrl, AVT, "GetTransportInfo", "<InstanceID>0</InstanceID>", timeoutMs = 2000)
         if (status == 200) {
             val m = Pattern.compile("<CurrentTransportState>(.*?)</CurrentTransportState>").matcher(data)
             if (m.find()) return m.group(1)!!
@@ -540,7 +540,7 @@ object SonosManager {
     }
 
     fun getPositionInfo(speaker: SonosSpeaker): JSONObject {
-        val (status, data) = soap(speaker, speaker.controlUrl, AVT, "GetPositionInfo", "<InstanceID>0</InstanceID>")
+        val (status, data) = soap(speaker, speaker.controlUrl, AVT, "GetPositionInfo", "<InstanceID>0</InstanceID>", timeoutMs = 2000)
         val info = JSONObject().apply {
             put("track", "")
             put("duration", "00:00:00")

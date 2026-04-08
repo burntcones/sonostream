@@ -705,6 +705,7 @@ let selectedSpeaker = null;
 let currentFile = null;
 let isPlaying = false;
 let pollTimer = null;
+let polling = false;
 let queue = [];
 let queueIndex = -1;
 let lastPlayState = null;
@@ -1102,7 +1103,7 @@ async function fetchStatus() {
     }
   } catch (e) {
     pollFailCount++;
-    if (pollFailCount === 3 && !reconnecting) {
+    if (pollFailCount >= 5 && !reconnecting) {
       reconnecting = true;
       stopPolling();
       showToast('Lost connection to speaker. Trying to reconnect…', 'warning');
@@ -1148,12 +1149,20 @@ async function tryReconnect() {
 
 function startPolling() {
   stopPolling();
-  fetchStatus();
-  pollTimer = setInterval(fetchStatus, 2000);
+  polling = true;
+  pollNext();
+}
+
+function pollNext() {
+  if (!polling) return;
+  fetchStatus().finally(() => {
+    if (polling) pollTimer = setTimeout(pollNext, 2000);
+  });
 }
 
 function stopPolling() {
-  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  polling = false;
+  if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
 }
 
 // ─── Init ───────────────────────────────────────────────────────────────────
