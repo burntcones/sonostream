@@ -1,6 +1,6 @@
 {
-  "versionCode": 12,
-  "versionName": "1.7.0",
-  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v1.7.0/sonostream.apk",
-  "releaseNotes": "EQ now works on local playback (phone/BT speakers) — real-time AudioTrack decode with live EQ"
+  "versionCode": 13,
+  "versionName": "1.7.1",
+  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v1.7.1/sonostream.apk",
+  "releaseNotes": "Tap band labels to open Q/type popup, enable/disable toggle in popup"
 }

@@ -788,6 +788,7 @@ html, body {
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
           <span style="font-size:12px;font-weight:700;color:var(--text);" id="eqEditTitle">Band 1</span>
           <div style="display:flex;gap:6px;">
+            <button id="eqEditToggle" onclick="toggleEditingBand()" style="padding:2px 8px;font-size:10px;border:1px solid var(--border);border-radius:6px;background:none;color:var(--text2);cursor:pointer;">On</button>
             <button onclick="removeEditingBand()" style="padding:2px 8px;font-size:10px;border:1px solid #f87171;border-radius:6px;background:none;color:#f87171;cursor:pointer;">Delete</button>
             <button onclick="closeEqEdit()" style="padding:2px 8px;font-size:10px;border:1px solid var(--border);border-radius:6px;background:none;color:var(--text2);cursor:pointer;">Done</button>
           </div>
@@ -1547,8 +1548,8 @@ function renderEqBandList() {
     const f = b.frequency >= 1000 ? (b.frequency / 1000).toFixed(1) + 'k' : Math.round(b.frequency);
     const g = (b.gain >= 0 ? '+' : '') + b.gain.toFixed(1);
     const opacity = b.enabled ? 1 : 0.4;
-    return `<span data-eq-band="${i}" style="opacity:${opacity};padding:2px 6px;border-radius:4px;border:1px solid ${color};color:${color};cursor:pointer;user-select:none;"
-      onclick="toggleEqBand(${i})" ondblclick="removeEqBand(${i})">${f}Hz ${g}dB Q${b.q.toFixed(1)} ${b.type}</span>`;
+    return `<span data-eq-band="${i}" style="opacity:${opacity};padding:4px 8px;border-radius:6px;border:1px solid ${color};color:${color};cursor:pointer;user-select:none;font-size:11px;"
+      onclick="openEqEdit(${i}, event)">${f}Hz ${g}dB Q${b.q.toFixed(1)} ${b.type}</span>`;
   }).join('');
 }
 
@@ -1778,6 +1779,8 @@ function openEqEdit(bandIndex, pointerEvent) {
   $('eqEditQ').value = Math.round(b.q * 10);
   $('eqEditQLabel').textContent = b.q.toFixed(1);
   $('eqEditType').value = b.type;
+  $('eqEditToggle').textContent = b.enabled ? 'On' : 'Off';
+  $('eqEditToggle').style.color = b.enabled ? '#34d399' : '#f87171';
 
   // Position popup near the canvas
   const popup = $('eqEditPopup');
@@ -1790,6 +1793,14 @@ function openEqEdit(bandIndex, pointerEvent) {
 function closeEqEdit() {
   $('eqEditPopup').style.display = 'none';
   eqEditBand = -1;
+}
+
+function toggleEditingBand() {
+  if (eqEditBand < 0) return;
+  eqBands[eqEditBand].enabled = !eqBands[eqEditBand].enabled;
+  $('eqEditToggle').textContent = eqBands[eqEditBand].enabled ? 'On' : 'Off';
+  $('eqEditToggle').style.color = eqBands[eqEditBand].enabled ? '#34d399' : '#f87171';
+  drawEq(); renderEqBandList(); sendBandUpdate(eqEditBand);
 }
 
 function removeEditingBand() {
