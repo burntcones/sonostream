@@ -765,10 +765,8 @@ html, body {
           <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
         </button>
       </div>
-      <div class="volume-row">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5L6 9H2v6h4l5 4V5z"/></svg>
-        <input class="volume-slider" id="volumeSlider" type="range" min="0" max="100" value="50">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5L6 9H2v6h4l5 4V5zM19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
+      <div id="volumeControls">
+        <!-- Per-speaker volume sliders rendered by JS -->
       </div>
     </div>
   </div>
@@ -779,7 +777,11 @@ html, body {
     <div class="sheet-handle"></div>
     <div class="sheet-title">
       Speakers
-      <button id="btnRescan">Rescan</button>
+      <div style="display:flex;gap:8px;">
+        <button id="btnSelectAll">All</button>
+        <button id="btnRescan">Rescan</button>
+        <button id="btnSheetDone" style="background:var(--accent);color:#fff;">Done</button>
+      </div>
     </div>
     <div id="speakerList"></div>
   </div>
@@ -790,7 +792,7 @@ html, body {
 // ─── State ──────────────────────────────────────────────────────────────────
 let speakers = [];
 let files = [];
-let selectedSpeaker = null;
+let selectedSpeakers = [];
 let currentFile = null;
 let isPlaying = false;
 let pollTimer = null;
@@ -832,7 +834,7 @@ async function loadSpeakers() {
     const data = await api('GET', '/api/speakers');
     speakers = data.speakers || [];
     renderSpeakerList();
-    if (speakers.length === 1 && !selectedSpeaker) selectSpeaker(speakers[0]);
+    if (speakers.length === 1 && selectedSpeakers.length === 0) toggleSpeaker(speakers[0]);
     updateSpeakerBar();
   } catch (e) {
     showToast('Could not load speakers. Check WiFi connection.', 'error');
@@ -845,7 +847,7 @@ async function rescanSpeakers() {
     const data = await api('GET', '/api/discover');
     speakers = data.speakers || [];
     renderSpeakerList();
-    if (speakers.length === 1 && !selectedSpeaker) selectSpeaker(speakers[0]);
+    if (speakers.length === 1 && selectedSpeakers.length === 0) toggleSpeaker(speakers[0]);
     updateSpeakerBar();
     if (!speakers.length) {
       // Show diagnostics so user (or dev) can see exactly what happened
@@ -862,18 +864,41 @@ async function rescanSpeakers() {
   }
 }
 
-function selectSpeaker(sp) {
-  selectedSpeaker = sp;
+function toggleSpeaker(sp) {
+  const idx = selectedSpeakers.findIndex(s => s.name === sp.name);
+  if (idx >= 0) {
+    selectedSpeakers.splice(idx, 1);
+  } else {
+    selectedSpeakers.push(sp);
+  }
   updateSpeakerBar();
-  closeSheet();
-  // Get current volume
-  if (sp) fetchStatus();
+  renderSpeakerList();
+  renderVolumeControls();
+  if (selectedSpeakers.length > 0) fetchStatus();
+}
+
+function selectAllSpeakers() {
+  selectedSpeakers = [...speakers];
+  updateSpeakerBar();
+  renderSpeakerList();
+  renderVolumeControls();
+}
+
+function deselectAllSpeakers() {
+  selectedSpeakers = [];
+  updateSpeakerBar();
+  renderSpeakerList();
+  renderVolumeControls();
 }
 
 function updateSpeakerBar() {
-  if (selectedSpeaker) {
-    $('speakerLabel').textContent = selectedSpeaker.name;
-    $('speakerModel').textContent = selectedSpeaker.model;
+  if (selectedSpeakers.length === 1) {
+    $('speakerLabel').textContent = selectedSpeakers[0].name;
+    $('speakerModel').textContent = selectedSpeakers[0].model;
+    $('speakerDot').classList.add('connected');
+  } else if (selectedSpeakers.length > 1) {
+    $('speakerLabel').textContent = `${selectedSpeakers.length} speakers`;
+    $('speakerModel').textContent = selectedSpeakers.map(s => s.name).join(', ');
     $('speakerDot').classList.add('connected');
   } else {
     $('speakerLabel').textContent = speakers.length ? 'Select Speaker…' : 'No speakers found';
@@ -892,7 +917,7 @@ function renderSpeakerList() {
     const memberCount = sp.group_members ? sp.group_members.length : 0;
     const groupBadge = memberCount > 1 ? `<span style="background:var(--accent);color:#fff;font-size:10px;padding:2px 6px;border-radius:6px;margin-left:6px;">${memberCount} speakers</span>` : '';
     return `
-    <div class="speaker-item ${selectedSpeaker?.name === sp.name ? 'selected' : ''}" data-name="${sp.name}">
+    <div class="speaker-item ${selectedSpeakers.some(s => s.name === sp.name) ? 'selected' : ''}" data-name="${sp.name}">
       <div class="sp-icon">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v18M8 7a4 4 0 0 1 8 0M5 10a7 7 0 0 1 14 0"/></svg>
       </div>
@@ -909,7 +934,7 @@ function renderSpeakerList() {
   el.querySelectorAll('.speaker-item').forEach(item => {
     item.addEventListener('click', () => {
       const sp = speakers.find(s => s.name === item.dataset.name);
-      if (sp) selectSpeaker(sp);
+      if (sp) toggleSpeaker(sp);
     });
   });
 }
@@ -927,6 +952,14 @@ function closeSheet() {
 $('speakerToggle').addEventListener('click', openSheet);
 $('sheetOverlay').addEventListener('click', closeSheet);
 $('btnRescan').addEventListener('click', rescanSpeakers);
+$('btnSheetDone').addEventListener('click', closeSheet);
+$('btnSelectAll').addEventListener('click', () => {
+  if (selectedSpeakers.length === speakers.length) {
+    deselectAllSpeakers();
+  } else {
+    selectAllSpeakers();
+  }
+});
 
 // ─── Files ──────────────────────────────────────────────────────────────────
 async function loadFiles() {
@@ -1032,7 +1065,7 @@ document.querySelectorAll('.sort-btn').forEach(btn => {
 
 // ─── Playback ───────────────────────────────────────────────────────────────
 async function playFile(path, buildQueue = true) {
-  if (!selectedSpeaker) { openSheet(); return; }
+  if (!selectedSpeakers.length) { openSheet(); return; }
 
   // Build queue from currently visible files
   if (buildQueue) {
@@ -1053,7 +1086,12 @@ async function playFile(path, buildQueue = true) {
   // On tablet, player sidebar is always visible via CSS
 
   try {
-    const result = await api('POST', '/api/play', { speaker: selectedSpeaker.name, file: path });
+    let result;
+    if (selectedSpeakers.length > 1) {
+      result = await api('POST', '/api/play-multi', { speakers: selectedSpeakers.map(s => s.name), file: path });
+    } else {
+      result = await api('POST', '/api/play', { speaker: selectedSpeakers[0].name, file: path });
+    }
     if (result.success === false) {
       showToast('Speaker could not play this file.', 'error');
       return;
@@ -1067,10 +1105,14 @@ async function playFile(path, buildQueue = true) {
 }
 
 async function togglePlay() {
-  if (!selectedSpeaker) return;
+  if (!selectedSpeakers.length) return;
   const action = isPlaying ? 'Pause' : 'Play';
   try {
-    await api('POST', '/api/control', { speaker: selectedSpeaker.name, action });
+    if (selectedSpeakers.length > 1) {
+      await api('POST', '/api/control-multi', { speakers: selectedSpeakers.map(s => s.name), action });
+    } else {
+      await api('POST', '/api/control', { speaker: selectedSpeakers[0].name, action });
+    }
     isPlaying = !isPlaying;
     updatePlayIcon();
   } catch (e) {
@@ -1079,9 +1121,13 @@ async function togglePlay() {
 }
 
 async function stop() {
-  if (!selectedSpeaker) return;
+  if (!selectedSpeakers.length) return;
   try {
-    await api('POST', '/api/control', { speaker: selectedSpeaker.name, action: 'Stop' });
+    if (selectedSpeakers.length > 1) {
+      await api('POST', '/api/control-multi', { speakers: selectedSpeakers.map(s => s.name), action: 'Stop' });
+    } else {
+      await api('POST', '/api/control', { speaker: selectedSpeakers[0].name, action: 'Stop' });
+    }
     isPlaying = false;
     updatePlayIcon();
     stopPolling();
@@ -1118,33 +1164,52 @@ $('btnPrev').addEventListener('click', () => playNext(-1));
 $('btnNext').addEventListener('click', () => playNext(1));
 
 // ─── Volume ─────────────────────────────────────────────────────────────────
-let volTimeout;
-let volInteracting = false;
-$('volumeSlider').addEventListener('input', e => {
-  volInteracting = true;
-  clearTimeout(volTimeout);
-  volTimeout = setTimeout(() => {
-    if (selectedSpeaker) {
-      api('POST', '/api/volume', { speaker: selectedSpeaker.name, volume: +e.target.value })
-        .catch(() => {});
-    }
-  }, 150);
-});
-// Release the guard after the user lifts their finger / releases mouse
-$('volumeSlider').addEventListener('change', () => {
-  setTimeout(() => { volInteracting = false; }, 2500);
-});
+function renderVolumeControls() {
+  const el = $('volumeControls');
+  if (selectedSpeakers.length === 0) { el.innerHTML = ''; return; }
+
+  el.innerHTML = selectedSpeakers.map(sp => `
+    <div class="volume-row" style="flex-direction:column;gap:4px;padding:4px 20px;">
+      <div style="display:flex;align-items:center;gap:10px;width:100%;">
+        <svg style="flex-shrink:0;" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5L6 9H2v6h4l5 4V5z"/></svg>
+        <input class="volume-slider" type="range" min="0" max="100" value="50" data-speaker="${sp.name}" style="flex:1;">
+        <span style="font-size:11px;color:var(--text2);min-width:28px;text-align:right;" data-vol-label="${sp.name}">50</span>
+      </div>
+      <div style="font-size:10px;color:var(--text2);padding-left:26px;">${sp.name}</div>
+    </div>
+  `).join('');
+
+  el.querySelectorAll('.volume-slider').forEach(slider => {
+    let interacting = false;
+    slider.addEventListener('input', e => {
+      interacting = true;
+      const label = el.querySelector(`[data-vol-label="${e.target.dataset.speaker}"]`);
+      if (label) label.textContent = e.target.value;
+      clearTimeout(slider._volTimeout);
+      slider._volTimeout = setTimeout(() => {
+        api('POST', '/api/volume', { speaker: e.target.dataset.speaker, volume: +e.target.value }).catch(() => {});
+      }, 150);
+    });
+    slider.addEventListener('change', () => {
+      setTimeout(() => { interacting = false; }, 2500);
+    });
+    slider._interacting = () => interacting;
+  });
+}
 
 // ─── Progress Bar Click-to-Seek ─────────────────────────────────────────────
 $('progressBar').addEventListener('click', e => {
-  if (!selectedSpeaker || !currentDuration) return;
+  if (!selectedSpeakers.length || !currentDuration) return;
   const pct = e.offsetX / e.currentTarget.offsetWidth;
   const seekSec = Math.floor(pct * currentDuration);
   const h = Math.floor(seekSec / 3600);
   const m = Math.floor((seekSec % 3600) / 60);
   const s = seekSec % 60;
   const pos = `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
-  api('POST', '/api/seek', { speaker: selectedSpeaker.name, position: pos });
+  // Seek on all selected speakers
+  selectedSpeakers.forEach(sp => {
+    api('POST', '/api/seek', { speaker: sp.name, position: pos });
+  });
 });
 
 // ─── Status Polling ─────────────────────────────────────────────────────────
@@ -1167,12 +1232,22 @@ function fmtTime(sec) {
 }
 
 async function fetchStatus() {
-  if (!selectedSpeaker) return;
+  if (!selectedSpeakers.length) return;
   try {
-    const data = await api('GET', `/api/status/${encodeURIComponent(selectedSpeaker.name)}`);
+    const primary = selectedSpeakers[0];
+    const data = await api('GET', `/api/status/${encodeURIComponent(primary.name)}`);
     pollFailCount = 0;
 
-    if (data.volume != null && !volInteracting) $('volumeSlider').value = data.volume;
+    // Update volume slider for primary speaker
+    if (data.volume != null) {
+      const el = $('volumeControls');
+      const slider = el.querySelector(`[data-speaker="${primary.name}"]`);
+      if (slider && !slider._interacting?.()) {
+        slider.value = data.volume;
+        const label = el.querySelector(`[data-vol-label="${primary.name}"]`);
+        if (label) label.textContent = data.volume;
+      }
+    }
 
     const dur = parseTime(data.position?.duration);
     const pos = parseTime(data.position?.position);
@@ -1200,6 +1275,22 @@ async function fetchStatus() {
     if (data.position?.track && data.position.track !== $('trackName').textContent) {
       $('trackName').textContent = data.position.track;
     }
+
+    // Fetch volume for other selected speakers (non-blocking)
+    selectedSpeakers.slice(1).forEach(async sp => {
+      try {
+        const spData = await api('GET', `/api/status/${encodeURIComponent(sp.name)}`);
+        if (spData.volume != null) {
+          const el = $('volumeControls');
+          const slider = el.querySelector(`[data-speaker="${sp.name}"]`);
+          if (slider && !slider._interacting?.()) {
+            slider.value = spData.volume;
+            const label = el.querySelector(`[data-vol-label="${sp.name}"]`);
+            if (label) label.textContent = spData.volume;
+          }
+        }
+      } catch (e) { /* non-critical */ }
+    });
   } catch (e) {
     pollFailCount++;
     if (pollFailCount >= 5 && !reconnecting) {
@@ -1212,26 +1303,32 @@ async function fetchStatus() {
 }
 
 async function tryReconnect() {
-  const prevName = selectedSpeaker?.name;
+  const prevNames = selectedSpeakers.map(s => s.name);
   try {
     const data = await api('GET', '/api/discover');
     speakers = data.speakers || [];
     renderSpeakerList();
     updateSpeakerBar();
-    // Try to reconnect to the same speaker by name (or partial match for groups)
-    if (prevName) {
-      const match = speakers.find(s => s.name === prevName || prevName.includes(s.name) || s.name.includes(prevName));
-      if (match) {
-        selectSpeaker(match);
+    // Try to reconnect to previously selected speakers
+    if (prevNames.length > 0) {
+      const matched = speakers.filter(s => prevNames.some(n => s.name === n || n.includes(s.name) || s.name.includes(n)));
+      if (matched.length > 0) {
+        selectedSpeakers = matched;
+        updateSpeakerBar();
+        renderSpeakerList();
+        renderVolumeControls();
         pollFailCount = 0;
         reconnecting = false;
-        showToast('Reconnected to ' + match.name, 'success');
+        showToast('Reconnected to ' + matched.map(s => s.name).join(', '), 'success');
         startPolling();
         return;
       }
     }
     if (speakers.length > 0) {
-      selectSpeaker(speakers[0]);
+      selectedSpeakers = [speakers[0]];
+      updateSpeakerBar();
+      renderSpeakerList();
+      renderVolumeControls();
       pollFailCount = 0;
       reconnecting = false;
       showToast('Reconnected to ' + speakers[0].name, 'success');
@@ -1302,7 +1399,7 @@ window._updateProgress = function(pct) {
   // Auto-discover speakers on first launch (not just load empty list)
   await rescanSpeakers();
   await loadFiles();
-  if (selectedSpeaker) startPolling();
+  if (selectedSpeakers.length) startPolling();
   // Check for updates after UI is loaded (non-blocking)
   setTimeout(checkForUpdate, 3000);
 })();

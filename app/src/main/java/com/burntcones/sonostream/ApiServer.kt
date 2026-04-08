@@ -17,6 +17,25 @@ class ApiServer(
 
     private val audioExtensions = setOf("mp3", "flac", "wav", "ogg", "m4a", "aac", "wma", "aiff")
 
+    init {
+        LocalPlayer.init(context)
+    }
+
+    private fun localDeviceSpeaker(): JSONObject = JSONObject().apply {
+        put("name", "This Device")
+        put("model", "Bluetooth / Built-in Speaker")
+        put("ip", "local")
+        put("port", 0)
+        put("type", "local")
+        put("control_url", "")
+        put("rendering_url", "")
+        put("location", "")
+        put("uuid", "local")
+        put("is_coordinator", true)
+        put("group_members", org.json.JSONArray())
+        put("group_id", "")
+    }
+
     private fun getLocalIp(): String {
         val wifi = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
         val ip = wifi.connectionInfo.ipAddress
@@ -31,13 +50,19 @@ class ApiServer(
             when {
                 // ── API: GET ──
                 method == Method.GET && uri == "/api/speakers" -> jsonResponse(JSONObject().apply {
-                    put("speakers", JSONArray().apply { SonosManager.speakers.values.forEach { put(it.toJson()) } })
+                    put("speakers", JSONArray().apply {
+                        put(localDeviceSpeaker())
+                        SonosManager.speakers.values.forEach { put(it.toJson()) }
+                    })
                 })
 
                 method == Method.GET && uri == "/api/discover" -> {
                     SonosManager.discover(context)
                     jsonResponse(JSONObject().apply {
-                        put("speakers", JSONArray().apply { SonosManager.speakers.values.forEach { put(it.toJson()) } })
+                        put("speakers", JSONArray().apply {
+                            put(localDeviceSpeaker())
+                            SonosManager.speakers.values.forEach { put(it.toJson()) }
+                        })
                         put("count", SonosManager.speakers.size)
                         put("diagnostics", SonosManager.lastDiagnostics)
                     })
@@ -83,6 +108,11 @@ class ApiServer(
                         put("files", files)
                         put("music_dir", "Device Music")
                     })
+                }
+
+                // ── Local playback (Bluetooth / built-in) ──
+                method == Method.GET && uri == "/api/local/status" -> {
+                    jsonResponse(LocalPlayer.getStatus())
                 }
 
                 method == Method.GET && uri.startsWith("/api/status/") -> {
@@ -171,6 +201,114 @@ class ApiServer(
                 } else {
                     jsonResponse(JSONObject().put("success", SonosManager.seek(sp, position)))
                 }
+            }
+
+            // ── Local playback (Bluetooth / built-in) ──
+
+            "/api/local/play" -> {
+                val filePath = data.optString("file")
+                if (filePath.isEmpty()) {
+                    jsonResponse(JSONObject().put("error", "Missing file"), Response.Status.BAD_REQUEST)
+                } else {
+                    jsonResponse(JSONObject().put("success", LocalPlayer.play(filePath)))
+                }
+            }
+
+            "/api/local/control" -> {
+                val action = data.optString("action")
+                val ok = when (action) {
+                    "Play" -> LocalPlayer.resume()
+                    "Pause" -> LocalPlayer.pause()
+                    "Stop" -> LocalPlayer.stop()
+                    else -> false
+                }
+                jsonResponse(JSONObject().put("success", ok))
+            }
+
+            "/api/local/volume" -> {
+                val vol = data.optInt("volume", -1)
+                if (vol < 0) {
+                    jsonResponse(JSONObject().put("error", "Missing volume"), Response.Status.BAD_REQUEST)
+                } else {
+                    jsonResponse(JSONObject().put("success", LocalPlayer.setVolume(vol)))
+                }
+            }
+
+            "/api/local/seek" -> {
+                val positionMs = data.optInt("position_ms", -1)
+                if (positionMs < 0) {
+                    jsonResponse(JSONObject().put("error", "Missing position"), Response.Status.BAD_REQUEST)
+                } else {
+                    jsonResponse(JSONObject().put("success", LocalPlayer.seekTo(positionMs)))
+                }
+            }
+
+            // ── Multi-speaker endpoints ──
+
+            "/api/play-multi" -> {
+                val speakerNames = data.optJSONArray("speakers") ?: JSONArray()
+                val filePath = data.optString("file")
+                if (speakerNames.length() == 0 || filePath.isEmpty()) {
+                    jsonResponse(JSONObject().put("error", "Missing speakers or file"), Response.Status.BAD_REQUEST)
+                } else {
+                    val localIp = getLocalIp()
+                    val port = listeningPort
+                    val audioUri = "http://$localIp:$port/audio/${java.net.URLEncoder.encode(filePath, "UTF-8").replace("+", "%20")}"
+                    val title = File(filePath).nameWithoutExtension
+                    val results = JSONObject()
+                    for (i in 0 until speakerNames.length()) {
+                        val name = speakerNames.getString(i)
+                        val sp = SonosManager.speakers[name]
+                        results.put(name, if (sp != null) SonosManager.playUri(sp, audioUri, title) else false)
+                    }
+                    jsonResponse(JSONObject().put("results", results))
+                }
+            }
+
+            "/api/control-multi" -> {
+                val speakerNames = data.optJSONArray("speakers") ?: JSONArray()
+                val action = data.optString("action")
+                if (speakerNames.length() == 0 || action.isEmpty()) {
+                    jsonResponse(JSONObject().put("error", "Missing speakers or action"), Response.Status.BAD_REQUEST)
+                } else {
+                    val results = JSONObject()
+                    for (i in 0 until speakerNames.length()) {
+                        val name = speakerNames.getString(i)
+                        val sp = SonosManager.speakers[name]
+                        results.put(name, if (sp != null) SonosManager.transportAction(sp, action) else false)
+                    }
+                    jsonResponse(JSONObject().put("results", results))
+                }
+            }
+
+            "/api/volume-multi" -> {
+                val items = data.optJSONArray("speakers") ?: JSONArray()
+                val results = JSONObject()
+                for (i in 0 until items.length()) {
+                    val item = items.getJSONObject(i)
+                    val name = item.optString("name")
+                    val vol = item.optInt("volume", -1)
+                    val sp = SonosManager.speakers[name]
+                    results.put(name, if (sp != null && vol >= 0) SonosManager.setVolume(sp, vol) else false)
+                }
+                jsonResponse(JSONObject().put("results", results))
+            }
+
+            "/api/status-multi" -> {
+                val speakerNames = data.optJSONArray("speakers") ?: JSONArray()
+                val results = JSONObject()
+                for (i in 0 until speakerNames.length()) {
+                    val name = speakerNames.getString(i)
+                    val sp = SonosManager.speakers[name]
+                    if (sp != null) {
+                        results.put(name, JSONObject().apply {
+                            put("state", SonosManager.getTransportInfo(sp))
+                            put("position", SonosManager.getPositionInfo(sp))
+                            put("volume", SonosManager.getVolume(sp))
+                        })
+                    }
+                }
+                jsonResponse(results)
             }
 
             else -> newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "Not found")
