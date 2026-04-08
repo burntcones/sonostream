@@ -3,33 +3,33 @@
     android:height="24dp"
     android:viewportWidth="24"
     android:viewportHeight="24">
-    <!-- Monochrome sound wave icon for notification -->
+    <!-- Equalizer bars — matches launcher icon style -->
     <path
-        android:pathData="M12,3 L12,21"
+        android:pathData="M4,16 L4,10"
         android:strokeWidth="2"
         android:strokeColor="#FFFFFF"
         android:strokeLineCap="round"
         android:fillColor="#00000000"/>
     <path
-        android:pathData="M8,7 C5.5,9.5 5.5,14.5 8,17"
+        android:pathData="M8,18 L8,7"
         android:strokeWidth="2"
         android:strokeColor="#FFFFFF"
         android:strokeLineCap="round"
         android:fillColor="#00000000"/>
     <path
-        android:pathData="M5,10 C2,12.5 2,15.5 5,18"
+        android:pathData="M12,20 L12,4"
         android:strokeWidth="2"
         android:strokeColor="#FFFFFF"
         android:strokeLineCap="round"
         android:fillColor="#00000000"/>
     <path
-        android:pathData="M16,7 C18.5,9.5 18.5,14.5 16,17"
+        android:pathData="M16,18 L16,8"
         android:strokeWidth="2"
         android:strokeColor="#FFFFFF"
         android:strokeLineCap="round"
         android:fillColor="#00000000"/>
     <path
-        android:pathData="M19,10 C22,12.5 22,15.5 19,18"
+        android:pathData="M20,16 L20,11"
         android:strokeWidth="2"
         android:strokeColor="#FFFFFF"
         android:strokeLineCap="round"
