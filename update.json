@@ -1,6 +1,6 @@
 {
-  "versionCode": 2,
-  "versionName": "1.1.0",
-  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v1.1.0/app-debug.apk",
-  "releaseNotes": "Multi-speaker support, Bluetooth playback, per-speaker volume, volume slider fix"
+  "versionCode": 3,
+  "versionName": "1.1.1",
+  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v1.1.1/app-debug.apk",
+  "releaseNotes": "Volume slider diagnostic: shows toast on SetVolume failure. Extended interaction guard to 5s."
 }

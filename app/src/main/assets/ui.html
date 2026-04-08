@@ -1187,11 +1187,17 @@ function renderVolumeControls() {
       if (label) label.textContent = e.target.value;
       clearTimeout(slider._volTimeout);
       slider._volTimeout = setTimeout(() => {
-        api('POST', '/api/volume', { speaker: e.target.dataset.speaker, volume: +e.target.value }).catch(() => {});
+        api('POST', '/api/volume', { speaker: e.target.dataset.speaker, volume: +e.target.value })
+          .then(r => {
+            if (r.success === false) showToast(`Vol failed: ${JSON.stringify(r)}`, 'error');
+          })
+          .catch(err => showToast(`Vol error: ${err.message}`, 'error'));
       }, 150);
     });
     slider.addEventListener('change', () => {
-      setTimeout(() => { interacting = false; }, 2500);
+      // Keep guard active for 5s after release — gives SOAP call time to
+      // propagate and the next poll to read the new value back
+      setTimeout(() => { interacting = false; }, 5000);
     });
     slider._interacting = () => interacting;
   });
