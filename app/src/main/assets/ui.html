@@ -780,7 +780,8 @@ html, body {
             <button id="btnEqReset" style="padding:2px 8px;font-size:10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text2);cursor:pointer;">Reset</button>
           </div>
         </div>
-        <canvas id="eqCanvas" width="600" height="200" style="width:100%;height:140px;background:var(--surface);border-radius:10px;border:1px solid var(--border);touch-action:none;"></canvas>
+        <canvas id="eqCanvas" width="600" height="300" style="width:100%;height:200px;background:var(--surface);border-radius:10px;border:1px solid var(--border);touch-action:none;"></canvas>
+        <div id="eqDragLabel" style="display:none;position:absolute;z-index:120;background:rgba(0,0,0,0.85);color:#fff;padding:4px 8px;border-radius:6px;font-size:11px;font-family:monospace;pointer-events:none;white-space:nowrap;"></div>
         <div id="eqBandList" style="margin-top:6px;font-size:10px;color:var(--text2);display:flex;flex-wrap:wrap;gap:4px;"></div>
       </div>
       <!-- Band Edit Popup (tap a band node on the canvas) -->
@@ -1650,23 +1651,46 @@ function drawEq() {
     const x = freqToX(b.frequency, cw);
     const y = gainToY(b.gain, ch);
     const color = EQ_COLORS[i % EQ_COLORS.length];
+    const isDragging = (eqDragging === i);
 
-    // Outer glow
+    // Q width indicator (visible when dragging — shows bandwidth)
+    if (isDragging) {
+      // Approximate -3dB bandwidth in octaves ≈ 1/Q, draw as horizontal extent
+      const octaves = 1.0 / Math.max(0.1, b.q);
+      const fLow = b.frequency * Math.pow(2, -octaves / 2);
+      const fHigh = b.frequency * Math.pow(2, octaves / 2);
+      const xLow = freqToX(Math.max(EQ_FREQ_MIN, fLow), cw);
+      const xHigh = freqToX(Math.min(EQ_FREQ_MAX, fHigh), cw);
+      eqCtx.beginPath();
+      eqCtx.moveTo(xLow, y);
+      eqCtx.lineTo(xHigh, y);
+      eqCtx.lineWidth = 3;
+      eqCtx.strokeStyle = color + '80';
+      eqCtx.stroke();
+      // End caps
+      eqCtx.beginPath();
+      eqCtx.arc(xLow, y, 3, 0, Math.PI * 2);
+      eqCtx.arc(xHigh, y, 3, 0, Math.PI * 2);
+      eqCtx.fillStyle = color + '80';
+      eqCtx.fill();
+    }
+
+    // Outer glow (larger when dragging)
     eqCtx.beginPath();
-    eqCtx.arc(x, y, 12, 0, Math.PI * 2);
-    eqCtx.fillStyle = color + '20';
+    eqCtx.arc(x, y, isDragging ? 16 : 12, 0, Math.PI * 2);
+    eqCtx.fillStyle = color + (isDragging ? '40' : '20');
     eqCtx.fill();
 
-    // Inner dot
+    // Inner dot (larger when dragging for better visibility)
     eqCtx.beginPath();
-    eqCtx.arc(x, y, 5, 0, Math.PI * 2);
+    eqCtx.arc(x, y, isDragging ? 7 : 5, 0, Math.PI * 2);
     eqCtx.fillStyle = color;
     eqCtx.fill();
 
     // White ring if dragging
-    if (eqDragging === i) {
+    if (isDragging) {
       eqCtx.strokeStyle = '#fff';
-      eqCtx.lineWidth = 1.5;
+      eqCtx.lineWidth = 2;
       eqCtx.stroke();
     }
   });
@@ -1713,53 +1737,142 @@ function sendBandUpdate(bandIndex) {
   }, 100);
 }
 
-function eqDragUpdate(bandIndex, freq, gain) {
-  freq = Math.max(EQ_FREQ_MIN, Math.min(EQ_FREQ_MAX, freq));
-  gain = Math.max(EQ_GAIN_MIN, Math.min(EQ_GAIN_MAX, gain));
-  eqBands[bandIndex].frequency = Math.round(freq);
-  eqBands[bandIndex].gain = Math.round(gain * 10) / 10;
+function eqDragUpdate(bandIndex, freq, gain, q) {
+  if (freq !== undefined) {
+    freq = Math.max(EQ_FREQ_MIN, Math.min(EQ_FREQ_MAX, freq));
+    eqBands[bandIndex].frequency = Math.round(freq);
+  }
+  if (gain !== undefined) {
+    gain = Math.max(EQ_GAIN_MIN, Math.min(EQ_GAIN_MAX, gain));
+    eqBands[bandIndex].gain = Math.round(gain * 10) / 10;
+  }
+  if (q !== undefined) {
+    eqBands[bandIndex].q = Math.round(Math.max(0.1, Math.min(18.0, q)) * 10) / 10;
+  }
   drawEq();
   renderEqBandList();
   sendBandUpdate(bandIndex);
+  showDragLabel();
 }
 
-// Drag on canvas to move band freq/gain
-// Use a movement threshold (8px) so finger jitter on tap doesn't count as drag
+// ── Multi-touch: drag for freq/gain, pinch for Q ──
+// Standard pro-EQ interaction: one finger drags the band node,
+// second finger pinch adjusts Q (spread = wide/low Q, pinch = narrow/high Q)
+
+const EQ_TAP_THRESHOLD = 8;
+const eqPointers = new Map();     // pointerId → {x, y}
 let eqDragMoved = false;
 let eqDragStartX = 0, eqDragStartY = 0;
-const EQ_TAP_THRESHOLD = 8; // px — movement less than this counts as a tap
+let eqPrimaryPointerId = -1;      // first finger (controls drag)
+let eqPinchMode = false;
+let eqPinchRefDist = 0;           // finger distance when pinch started
+let eqPinchRefQ = 1.0;            // Q value when pinch started
+
+function getPointerDist() {
+  if (eqPointers.size < 2) return 0;
+  const pts = [...eqPointers.values()];
+  const dx = pts[0].x - pts[1].x, dy = pts[0].y - pts[1].y;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+function showDragLabel() {
+  if (eqDragging < 0) { $('eqDragLabel').style.display = 'none'; return; }
+  const b = eqBands[eqDragging];
+  const rect = eqCanvas.getBoundingClientRect();
+  const bx = freqToX(b.frequency, rect.width);
+  const by = gainToY(b.gain, rect.height);
+  const label = $('eqDragLabel');
+  const f = b.frequency >= 1000 ? (b.frequency / 1000).toFixed(1) + 'k' : Math.round(b.frequency);
+  const g = (b.gain >= 0 ? '+' : '') + b.gain.toFixed(1);
+  label.textContent = `${f}Hz  ${g}dB  Q${b.q.toFixed(1)}`;
+  label.style.display = 'block';
+  label.style.left = (rect.left + bx - label.offsetWidth / 2) + 'px';
+  label.style.top = (rect.top + by - 32) + 'px';
+}
+
+function hideDragLabel() { $('eqDragLabel').style.display = 'none'; }
 
 eqCanvas.addEventListener('pointerdown', e => {
   const { x, y, w, h } = eqPointerPos(e);
-  eqDragging = eqFindBand(x, y, w, h);
-  eqDragMoved = false;
-  eqDragStartX = x;
-  eqDragStartY = y;
-  if (eqDragging >= 0) {
-    eqCanvas.setPointerCapture(e.pointerId);
-    drawEq();
+  eqPointers.set(e.pointerId, { x, y });
+  eqCanvas.setPointerCapture(e.pointerId);
+
+  if (eqDragging < 0) {
+    // First finger — find and start dragging a band
+    eqDragging = eqFindBand(x, y, w, h);
+    eqDragMoved = false;
+    eqDragStartX = x;
+    eqDragStartY = y;
+    eqPrimaryPointerId = e.pointerId;
+    if (eqDragging >= 0) drawEq();
+  } else if (eqPointers.size === 2 && !eqPinchMode) {
+    // Second finger while dragging — enter pinch mode for Q
+    eqPinchMode = true;
+    eqPinchRefDist = getPointerDist();
+    eqPinchRefQ = eqBands[eqDragging].q;
+    eqDragMoved = true; // prevent tap-to-popup
   }
 });
 
 eqCanvas.addEventListener('pointermove', e => {
-  if (eqDragging < 0) return;
+  if (!eqPointers.has(e.pointerId)) return;
   const { x, y, w, h } = eqPointerPos(e);
-  const dx = x - eqDragStartX, dy = y - eqDragStartY;
-  if (!eqDragMoved && Math.sqrt(dx*dx + dy*dy) < EQ_TAP_THRESHOLD) return;
-  eqDragMoved = true;
-  eqDragUpdate(eqDragging, xToFreq(x, w), yToGain(y, h));
+  eqPointers.set(e.pointerId, { x, y });
+
+  if (eqDragging < 0) return;
+
+  if (eqPinchMode && eqPointers.size >= 2) {
+    // Pinch mode — adjust Q based on finger distance
+    const dist = getPointerDist();
+    if (eqPinchRefDist > 10) {
+      const ratio = eqPinchRefDist / dist;
+      const newQ = eqPinchRefQ * ratio;
+      eqDragUpdate(eqDragging, undefined, undefined, newQ);
+    }
+    // Also allow primary finger to keep moving freq/gain
+    if (e.pointerId === eqPrimaryPointerId) {
+      eqDragUpdate(eqDragging, xToFreq(x, w), yToGain(y, h), undefined);
+    }
+  } else {
+    // Single finger drag — freq/gain
+    const dx = x - eqDragStartX, dy = y - eqDragStartY;
+    if (!eqDragMoved && Math.sqrt(dx * dx + dy * dy) < EQ_TAP_THRESHOLD) return;
+    eqDragMoved = true;
+    eqDragUpdate(eqDragging, xToFreq(x, w), yToGain(y, h));
+  }
 });
 
 eqCanvas.addEventListener('pointerup', e => {
-  const band = eqDragging;
-  eqDragging = -1;
-  drawEq();
-  // If user tapped (didn't drag beyond threshold), open edit popup for Q/type
-  if (!eqDragMoved && band >= 0) {
-    openEqEdit(band, e);
+  eqPointers.delete(e.pointerId);
+
+  if (eqPinchMode && eqPointers.size < 2) {
+    // Released second finger — exit pinch, keep dragging with remaining finger
+    eqPinchMode = false;
+  }
+
+  if (eqPointers.size === 0) {
+    // All fingers released
+    const band = eqDragging;
+    eqDragging = -1;
+    eqPrimaryPointerId = -1;
+    hideDragLabel();
+    drawEq();
+    if (!eqDragMoved && band >= 0) {
+      openEqEdit(band, e);
+    }
   }
 });
-eqCanvas.addEventListener('pointercancel', () => { eqDragging = -1; drawEq(); });
+
+eqCanvas.addEventListener('pointercancel', e => {
+  eqPointers.delete(e.pointerId);
+  if (eqPointers.size === 0) {
+    eqDragging = -1;
+    eqPrimaryPointerId = -1;
+    eqPinchMode = false;
+    hideDragLabel();
+    drawEq();
+  }
+});
 
 // ── Band Edit Popup ──
 function openEqEdit(bandIndex, pointerEvent) {

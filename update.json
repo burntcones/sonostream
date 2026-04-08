@@ -1,6 +1,6 @@
 {
-  "versionCode": 13,
-  "versionName": "1.7.1",
-  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v1.7.1/sonostream.apk",
-  "releaseNotes": "Tap band labels to open Q/type popup, enable/disable toggle in popup"
+  "versionCode": 14,
+  "versionName": "1.8.0",
+  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v1.8.0/sonostream.apk",
+  "releaseNotes": "Pro EQ touch: drag band for freq/gain, pinch for Q, floating readout, larger canvas"
 }
