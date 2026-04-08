@@ -1,6 +1,6 @@
 {
-  "versionCode": 11,
-  "versionName": "1.6.1",
-  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v1.6.1/sonostream.apk",
-  "releaseNotes": "EQ stream diagnostics — debug panel now shows decode/stream log"
+  "versionCode": 12,
+  "versionName": "1.7.0",
+  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v1.7.0/sonostream.apk",
+  "releaseNotes": "EQ now works on local playback (phone/BT speakers) — real-time AudioTrack decode with live EQ"
 }

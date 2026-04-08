@@ -259,7 +259,7 @@ object AudioProcessor {
      * Copies band parameters and recomputes coefficients at the stream's sample rate.
      * Filter delay lines are reset (may cause a tiny click — inaudible in practice).
      */
-    private fun syncEqParams(streamEq: ParametricEQ, liveEq: ParametricEQ) {
+    fun syncEqParams(streamEq: ParametricEQ, liveEq: ParametricEQ) {
         val params = liveEq.getBandsSnapshot()
         streamEq.bypass = liveEq.bypass
         // Rebuild bands with correct sample rate coefficients

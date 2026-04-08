@@ -26,6 +26,7 @@ class ApiServer(
 
     init {
         LocalPlayer.init(context)
+        LocalPlayer.liveEq = eq
         eq.load(context)
     }
 
