@@ -1379,7 +1379,10 @@ async function checkForUpdate() {
       $('updateVersion').textContent = 'v' + data.new_version;
       $('updateBanner').classList.add('visible');
     }
-  } catch (e) { /* silent — update check is non-critical */ }
+  } catch (e) {
+    console.warn('Update check failed:', e.message);
+    showToast('Update check: ' + e.message, 'warning');
+  }
 }
 
 $('updateBanner').addEventListener('click', () => {

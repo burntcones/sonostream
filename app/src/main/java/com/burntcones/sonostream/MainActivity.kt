@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.webkit.*
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -109,7 +110,15 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Exception) { 0 }
 
         Thread {
-            val update = UpdateChecker.checkForUpdate(currentVersionCode) ?: return@Thread
+            // Delay to let the UI load first
+            Thread.sleep(3000)
+            Log.d("UpdateChecker", "Checking for updates... current=$currentVersionCode")
+            val update = UpdateChecker.checkForUpdate(currentVersionCode)
+            if (update == null) {
+                Log.d("UpdateChecker", "No update available (or check failed)")
+                return@Thread
+            }
+            Log.d("UpdateChecker", "Update found: ${update.versionName} (code=${update.versionCode})")
             runOnUiThread {
                 android.app.AlertDialog.Builder(this)
                     .setTitle("Update Available — v${update.versionName}")
