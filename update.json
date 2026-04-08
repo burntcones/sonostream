@@ -1,6 +1,6 @@
 {
-  "versionCode": 1,
-  "versionName": "1.0.0",
-  "apkUrl": "",
-  "releaseNotes": "Initial release"
+  "versionCode": 2,
+  "versionName": "1.1.0",
+  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v1.1.0/app-debug.apk",
+  "releaseNotes": "Multi-speaker support, Bluetooth playback, per-speaker volume, volume slider fix"
 }

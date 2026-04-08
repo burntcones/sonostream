@@ -511,7 +511,9 @@ object SonosManager {
     fun setVolume(speaker: SonosSpeaker, volume: Int): Boolean {
         val vol = volume.coerceIn(0, 100)
         val args = "<InstanceID>0</InstanceID><Channel>Master</Channel><DesiredVolume>$vol</DesiredVolume>"
-        val (status, _) = soap(speaker, speaker.renderingUrl, RC, "SetVolume", args)
+        Log.d(TAG, "SetVolume: ${speaker.name} → $vol, url=${speaker.renderingUrl}, ip=${speaker.ip}:${speaker.port}")
+        val (status, data) = soap(speaker, speaker.renderingUrl, RC, "SetVolume", args)
+        Log.d(TAG, "SetVolume result: status=$status, response=${data.take(200)}")
         return status == 200
     }
 

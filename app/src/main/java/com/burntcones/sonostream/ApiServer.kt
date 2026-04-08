@@ -184,12 +184,20 @@ class ApiServer(
             }
 
             "/api/volume" -> {
-                val sp = SonosManager.speakers[data.optString("speaker")]
+                val speakerName = data.optString("speaker")
+                val sp = SonosManager.speakers[speakerName]
                 val vol = data.optInt("volume", -1)
                 if (sp == null || vol < 0) {
-                    jsonResponse(JSONObject().put("error", "Missing speaker or volume"), Response.Status.BAD_REQUEST)
+                    jsonResponse(JSONObject().apply {
+                        put("error", "Speaker '${speakerName}' not found or bad volume ($vol)")
+                        put("available_speakers", JSONArray(SonosManager.speakers.keys.toList()))
+                    }, Response.Status.BAD_REQUEST)
                 } else {
-                    jsonResponse(JSONObject().put("success", SonosManager.setVolume(sp, vol)))
+                    jsonResponse(JSONObject().apply {
+                        put("success", SonosManager.setVolume(sp, vol))
+                        put("speaker", speakerName)
+                        put("volume", vol)
+                    })
                 }
             }
 
