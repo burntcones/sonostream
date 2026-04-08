@@ -17,8 +17,16 @@ class ApiServer(
 
     private val audioExtensions = setOf("mp3", "flac", "wav", "ogg", "m4a", "aac", "wma", "aiff")
 
+    /** Shared parametric EQ instance — applies to all audio output. */
+    val eq = ParametricEQ()
+
+    /** Track which file is currently being processed (for UI feedback). */
+    @Volatile var processingFile: String? = null
+        private set
+
     init {
         LocalPlayer.init(context)
+        eq.load(context)
     }
 
     private fun localDeviceSpeaker(): JSONObject = JSONObject().apply {
@@ -113,6 +121,14 @@ class ApiServer(
                             put("release_notes", update.releaseNotes)
                         }
                     })
+                }
+
+                method == Method.GET && uri == "/api/eq" -> {
+                    jsonResponse(eq.toJson())
+                }
+
+                method == Method.GET && uri == "/api/eq/response" -> {
+                    jsonResponse(eq.responseToJson())
                 }
 
                 method == Method.GET && uri == "/api/files" -> {
@@ -264,6 +280,71 @@ class ApiServer(
                 }
             }
 
+            // ── EQ endpoints ──
+
+            "/api/eq" -> {
+                eq.loadFromJson(data)
+                eq.save(context)
+                jsonResponse(eq.toJson())
+            }
+
+            "/api/eq/bypass" -> {
+                eq.bypass = data.optBoolean("bypass", false)
+                eq.save(context)
+                jsonResponse(JSONObject().apply {
+                    put("bypass", eq.bypass)
+                })
+            }
+
+            "/api/eq/reset" -> {
+                eq.resetToDefaults()
+                eq.save(context)
+                jsonResponse(eq.toJson())
+            }
+
+            "/api/eq/band" -> {
+                val action = data.optString("action")
+                when (action) {
+                    "add" -> {
+                        val params = BiquadParams(
+                            frequency = data.optDouble("frequency", 1000.0).toFloat(),
+                            gainDb = data.optDouble("gain", 0.0).toFloat(),
+                            q = data.optDouble("q", 1.0).toFloat(),
+                            type = try { FilterType.valueOf(data.optString("type", "BELL")) } catch (_: Exception) { FilterType.BELL },
+                            enabled = data.optBoolean("enabled", true)
+                        )
+                        val ok = eq.addBand(params)
+                        eq.save(context)
+                        jsonResponse(JSONObject().put("success", ok).put("eq", eq.toJson()))
+                    }
+                    "remove" -> {
+                        val idx = data.optInt("index", -1)
+                        val ok = eq.removeBand(idx)
+                        eq.save(context)
+                        jsonResponse(JSONObject().put("success", ok).put("eq", eq.toJson()))
+                    }
+                    "update" -> {
+                        val idx = data.optInt("index", -1)
+                        val params = BiquadParams(
+                            frequency = data.optDouble("frequency", 1000.0).toFloat(),
+                            gainDb = data.optDouble("gain", 0.0).toFloat(),
+                            q = data.optDouble("q", 1.0).toFloat(),
+                            type = try { FilterType.valueOf(data.optString("type", "BELL")) } catch (_: Exception) { FilterType.BELL },
+                            enabled = data.optBoolean("enabled", true)
+                        )
+                        eq.updateBand(idx, params)
+                        eq.save(context)
+                        jsonResponse(eq.toJson())
+                    }
+                    else -> jsonResponse(JSONObject().put("error", "Unknown action"), Response.Status.BAD_REQUEST)
+                }
+            }
+
+            "/api/eq/cache/clear" -> {
+                AudioProcessor.clearCache(context.cacheDir)
+                jsonResponse(JSONObject().put("success", true))
+            }
+
             // ── Multi-speaker endpoints ──
 
             "/api/play-multi" -> {
@@ -340,17 +421,34 @@ class ApiServer(
 
     private fun serveAudio(session: IHTTPSession, uri: String): Response {
         val relPath = URLDecoder.decode(uri.removePrefix("/audio/"), "UTF-8")
-        val file = resolveAudioFile(relPath) ?: return newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "File not found")
+        val originalFile = resolveAudioFile(relPath) ?: return newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "File not found")
 
-        val mime = when (file.extension.lowercase()) {
-            "mp3" -> "audio/mpeg"
-            "flac" -> "audio/flac"
-            "wav" -> "audio/wav"
-            "ogg" -> "audio/ogg"
-            "m4a", "aac" -> "audio/mp4"
-            "wma" -> "audio/x-ms-wma"
-            "aiff" -> "audio/aiff"
-            else -> "application/octet-stream"
+        // If EQ is active (not bypassed, has non-zero gain), serve processed file
+        val file: File
+        val mime: String
+        if (!eq.bypass && eq.getBands().any { it.enabled && it.gainDb != 0f }) {
+            val cached = AudioProcessor.getCachedPath(context.cacheDir, originalFile.absolutePath, eq)
+            if (cached != null) {
+                file = File(cached)
+                mime = "audio/wav"
+            } else {
+                // Process on the fly (blocks this request until done)
+                val outFile = AudioProcessor.cacheFile(context.cacheDir, originalFile.absolutePath, eq)
+                processingFile = originalFile.name
+                val ok = AudioProcessor.processFile(originalFile.absolutePath, eq, outFile.absolutePath)
+                processingFile = null
+                if (ok) {
+                    file = outFile
+                    mime = "audio/wav"
+                } else {
+                    // Fallback to original on processing failure
+                    file = originalFile
+                    mime = mimeForAudio(originalFile)
+                }
+            }
+        } else {
+            file = originalFile
+            mime = mimeForAudio(originalFile)
         }
 
         val fileSize = file.length()
@@ -376,6 +474,17 @@ class ApiServer(
         val response = newFixedLengthResponse(Response.Status.OK, mime, fis, fileSize)
         response.addHeader("Accept-Ranges", "bytes")
         return response
+    }
+
+    private fun mimeForAudio(file: File): String = when (file.extension.lowercase()) {
+        "mp3" -> "audio/mpeg"
+        "flac" -> "audio/flac"
+        "wav" -> "audio/wav"
+        "ogg" -> "audio/ogg"
+        "m4a", "aac" -> "audio/mp4"
+        "wma" -> "audio/x-ms-wma"
+        "aiff" -> "audio/aiff"
+        else -> "application/octet-stream"
     }
 
     // ── File scanning via MediaStore ────────────────────────────────────
