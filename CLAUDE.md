@@ -75,7 +75,7 @@ Standard pro-EQ interaction pattern: single-finger drag for freq/gain, two-finge
 export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"
 export ANDROID_HOME="$HOME/Library/Android/sdk"
 ./gradlew assembleDebug
-# APK: app/build/outputs/apk/debug/sonostream.apk
+# APK: app/build/outputs/apk/debug/aux.apk
 # (copy from app/build/outputs/apk/debug/app-debug.apk)
 ```
 
@@ -88,8 +88,8 @@ export ANDROID_HOME="$HOME/Library/Android/sdk"
 ## OTA Update Workflow
 1. Bump `versionCode` and `versionName` in `app/build.gradle`
 2. `./gradlew clean assembleDebug`
-3. `cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/sonostream.apk`
-4. `gh release create vX.Y.Z app/build/outputs/apk/debug/sonostream.apk --repo burntcones/sonostream`
+3. `cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/aux.apk`
+4. `gh release create vX.Y.Z app/build/outputs/apk/debug/aux.apk --repo burntcones/sonostream`
 5. Update `update.json` with new versionCode, versionName, apkUrl, releaseNotes
 6. `git add . && git commit && git push`
 7. Tablets pick up the update on next app launch (3s delay check)
