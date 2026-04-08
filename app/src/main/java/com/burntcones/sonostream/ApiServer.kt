@@ -195,9 +195,7 @@ class ApiServer(
                 } else {
                     val localIp = getLocalIp()
                     val port = listeningPort
-                    val eqSuffix = if (!eq.bypass && eq.getBands().any { it.enabled && it.gainDb != 0f })
-                        "?eq=${eq.settingsHash()}" else ""
-                    val audioUri = "http://$localIp:$port/audio/${java.net.URLEncoder.encode(filePath, "UTF-8").replace("+", "%20")}$eqSuffix"
+                    val audioUri = "http://$localIp:$port/audio/${java.net.URLEncoder.encode(filePath, "UTF-8").replace("+", "%20")}"
                     val title = File(filePath).nameWithoutExtension
                     val ok = SonosManager.playUri(sp, audioUri, title)
                     jsonResponse(JSONObject().put("success", ok))
@@ -347,6 +345,40 @@ class ApiServer(
                 jsonResponse(JSONObject().put("success", true))
             }
 
+            // ── Sonos native bass/treble (instant, no processing) ──
+
+            "/api/sonos-eq" -> {
+                val speakerName = data.optString("speaker")
+                val sp = SonosManager.speakers[speakerName]
+                val eqType = data.optString("type") // "Bass" or "Treble"
+                val value = data.optInt("value", -999)
+                if (sp == null || eqType.isEmpty() || value == -999) {
+                    jsonResponse(JSONObject().put("error", "Missing speaker, type, or value"), Response.Status.BAD_REQUEST)
+                } else {
+                    jsonResponse(JSONObject().apply {
+                        put("success", SonosManager.setEQ(sp, eqType, value))
+                        put("speaker", speakerName)
+                        put("type", eqType)
+                        put("value", value)
+                    })
+                }
+            }
+
+            "/api/sonos-eq/get" -> {
+                val speakerName = data.optString("speaker")
+                val sp = SonosManager.speakers[speakerName]
+                if (sp == null) {
+                    jsonResponse(JSONObject().put("error", "Speaker not found"), Response.Status.BAD_REQUEST)
+                } else {
+                    jsonResponse(JSONObject().apply {
+                        put("speaker", speakerName)
+                        put("bass", SonosManager.getEQ(sp, "Bass"))
+                        put("treble", SonosManager.getEQ(sp, "Treble"))
+                        put("night_mode", SonosManager.getEQ(sp, "NightMode"))
+                    })
+                }
+            }
+
             // ── Multi-speaker endpoints ──
 
             "/api/play-multi" -> {
@@ -357,9 +389,7 @@ class ApiServer(
                 } else {
                     val localIp = getLocalIp()
                     val port = listeningPort
-                    val eqSuffix = if (!eq.bypass && eq.getBands().any { it.enabled && it.gainDb != 0f })
-                        "?eq=${eq.settingsHash()}" else ""
-                    val audioUri = "http://$localIp:$port/audio/${java.net.URLEncoder.encode(filePath, "UTF-8").replace("+", "%20")}$eqSuffix"
+                    val audioUri = "http://$localIp:$port/audio/${java.net.URLEncoder.encode(filePath, "UTF-8").replace("+", "%20")}"
                     val title = File(filePath).nameWithoutExtension
                     val results = JSONObject()
                     for (i in 0 until speakerNames.length()) {
@@ -425,36 +455,17 @@ class ApiServer(
 
     private fun serveAudio(session: IHTTPSession, uri: String): Response {
         val relPath = URLDecoder.decode(uri.removePrefix("/audio/"), "UTF-8")
-        val originalFile = resolveAudioFile(relPath) ?: return newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "File not found")
+        val file = resolveAudioFile(relPath) ?: return newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "File not found")
 
-        // If EQ is active (not bypassed, has non-zero gain), serve processed file
-        val file: File
-        val mime: String
-        if (!eq.bypass && eq.getBands().any { it.enabled && it.gainDb != 0f }) {
-            val cached = AudioProcessor.getCachedPath(context.cacheDir, originalFile.absolutePath, eq)
-            if (cached != null) {
-                file = File(cached)
-                mime = "audio/wav"
-            } else {
-                // Process on the fly (blocks this request until done)
-                val outFile = AudioProcessor.cacheFile(context.cacheDir, originalFile.absolutePath, eq)
-                processingFile = originalFile.name
-                val ok = AudioProcessor.processFile(originalFile.absolutePath, eq, outFile.absolutePath)
-                processingFile = null
-                if (ok) {
-                    file = outFile
-                    mime = "audio/wav"
-                } else {
-                    // Fallback to original on processing failure
-                    file = originalFile
-                    mime = mimeForAudio(originalFile)
-                }
-            }
-        } else {
-            file = originalFile
-            mime = mimeForAudio(originalFile)
+        // Check if EQ is active (has any non-zero gain band enabled)
+        val eqActive = !eq.bypass && eq.getBands().any { it.enabled && it.gainDb != 0f }
+
+        if (eqActive) {
+            return serveEqAudio(session, file)
         }
 
+        // No EQ — serve original file directly
+        val mime = mimeForAudio(file)
         val fileSize = file.length()
         val rangeHeader = session.headers["range"]
 
@@ -476,6 +487,69 @@ class ApiServer(
 
         val fis = FileInputStream(file)
         val response = newFixedLengthResponse(Response.Status.OK, mime, fis, fileSize)
+        response.addHeader("Accept-Ranges", "bytes")
+        return response
+    }
+
+    /**
+     * Serve EQ-processed audio as a WAV stream. Decodes → EQ → streams on the fly.
+     * Supports Range requests for seeking.
+     */
+    private fun serveEqAudio(session: IHTTPSession, file: File): Response {
+        val info = AudioProcessor.probe(file.absolutePath)
+            ?: return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, MIME_PLAINTEXT, "Cannot read audio")
+
+        val wavSize = AudioProcessor.estimateWavSize(info)
+        val rangeHeader = session.headers["range"]
+
+        // Set up a pipe: processing thread writes, NanoHTTPD reads
+        val pipeIn = PipedInputStream(65536)
+        val pipeOut = PipedOutputStream(pipeIn)
+
+        if (rangeHeader != null && rangeHeader.startsWith("bytes=")) {
+            val rangeParts = rangeHeader.removePrefix("bytes=").split("-")
+            val start = rangeParts[0].toLongOrNull() ?: 0
+            val end = if (rangeParts.size > 1 && rangeParts[1].isNotEmpty()) rangeParts[1].toLong() else wavSize - 1
+            val length = end - start + 1
+
+            // Calculate seek position: bytes after 44-byte WAV header → sample time
+            val dataOffset = if (start > 44) start - 44 else 0L
+            val bytesPerSample = info.channels * 2
+            val sampleOffset = dataOffset / bytesPerSample
+            val seekUs = sampleOffset * 1_000_000L / info.sampleRate
+
+            Thread {
+                try {
+                    if (start < 44) {
+                        // Range starts within WAV header — unusual but handle it
+                        AudioProcessor.streamProcess(file.absolutePath, eq, pipeOut)
+                    } else {
+                        AudioProcessor.streamProcess(
+                            file.absolutePath, eq, pipeOut,
+                            seekToUs = seekUs,
+                            skipBytes = dataOffset - (sampleOffset * bytesPerSample) // align to sample boundary
+                        )
+                    }
+                } catch (_: Exception) {}
+                try { pipeOut.close() } catch (_: Exception) {}
+            }.start()
+
+            val response = newFixedLengthResponse(Response.Status.PARTIAL_CONTENT, "audio/wav", pipeIn, length)
+            response.addHeader("Content-Range", "bytes $start-$end/$wavSize")
+            response.addHeader("Accept-Ranges", "bytes")
+            response.addHeader("Content-Length", length.toString())
+            return response
+        }
+
+        // Full file request — stream from beginning
+        Thread {
+            try {
+                AudioProcessor.streamProcess(file.absolutePath, eq, pipeOut)
+            } catch (_: Exception) {}
+            try { pipeOut.close() } catch (_: Exception) {}
+        }.start()
+
+        val response = newFixedLengthResponse(Response.Status.OK, "audio/wav", pipeIn, wavSize)
         response.addHeader("Accept-Ranges", "bytes")
         return response
     }

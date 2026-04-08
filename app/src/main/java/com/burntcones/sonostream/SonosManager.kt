@@ -578,6 +578,30 @@ object SonosManager {
         return info
     }
 
+    /**
+     * Set Sonos native EQ. Instant — no audio processing needed.
+     * @param eqType "Bass", "Treble", "NightMode", "DialogLevel", "SubGain"
+     * @param value Bass/Treble: -10 to 10, NightMode/DialogLevel: 0 or 1
+     */
+    fun setEQ(speaker: SonosSpeaker, eqType: String, value: Int): Boolean {
+        val args = "<InstanceID>0</InstanceID><EQType>$eqType</EQType><DesiredValue>$value</DesiredValue>"
+        logSoap("SetEQ: ${speaker.name} $eqType=$value")
+        val (status, data) = soap(speaker, speaker.renderingUrl, RC, "SetEQ", args)
+        logSoap("SetEQ result: status=$status, response=${data.take(200)}")
+        return status == 200
+    }
+
+    fun getEQ(speaker: SonosSpeaker, eqType: String): Int {
+        val args = "<InstanceID>0</InstanceID><EQType>$eqType</EQType>"
+        val (status, data) = soap(speaker, speaker.renderingUrl, RC, "GetEQ", args, timeoutMs = 2000)
+        if (status == 200) {
+            val m = Pattern.compile("<CurrentValue>(-?\\d+)</CurrentValue>").matcher(data)
+            if (m.find()) return m.group(1)!!.toInt()
+        }
+        logSoap("GetEQ FAILED: ${speaker.name} $eqType, status=$status")
+        return 0
+    }
+
     fun seek(speaker: SonosSpeaker, position: String): Boolean {
         val args = "<InstanceID>0</InstanceID><Unit>REL_TIME</Unit><Target>$position</Target>"
         val (status, _) = soap(speaker, speaker.controlUrl, AVT, "Seek", args)

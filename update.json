@@ -1,6 +1,6 @@
 {
-  "versionCode": 8,
-  "versionName": "1.4.0",
-  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v1.4.0/sonostream.apk",
-  "releaseNotes": "Media notification mini player with playback controls"
+  "versionCode": 9,
+  "versionName": "1.5.0",
+  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v1.5.0/sonostream.apk",
+  "releaseNotes": "Streaming parametric EQ — processes on the fly, tap band nodes to edit Q/type"
 }

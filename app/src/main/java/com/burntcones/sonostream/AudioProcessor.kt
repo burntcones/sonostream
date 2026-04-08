@@ -4,46 +4,81 @@ import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.util.Log
-import java.io.File
-import java.io.FileOutputStream
-import java.io.RandomAccessFile
+import java.io.*
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 /**
- * Decodes audio files (MP3, FLAC, M4A, WAV, OGG) to PCM,
- * applies parametric EQ, and writes the result as a WAV file.
+ * Streaming audio processor: decodes audio, applies parametric EQ,
+ * and streams WAV output on the fly. No temp files needed.
  */
 object AudioProcessor {
 
     private const val TAG = "AudioProcessor"
 
-    /**
-     * Process an audio file through the parametric EQ and write a WAV file.
-     *
-     * @param inputPath  Path to source audio file (any format MediaCodec supports)
-     * @param eq         Parametric EQ instance with configured bands
-     * @param outputPath Path to write the processed WAV file
-     * @param onProgress Callback with progress 0–100
-     * @return true if processing succeeded
-     */
-    fun processFile(
-        inputPath: String,
-        eq: ParametricEQ,
-        outputPath: String,
-        onProgress: (Int) -> Unit = {}
-    ): Boolean {
-        val inputFile = File(inputPath)
-        if (!inputFile.exists()) {
-            Log.e(TAG, "Input file not found: $inputPath")
-            return false
-        }
+    data class AudioInfo(
+        val sampleRate: Int,
+        val channels: Int,
+        val durationUs: Long,
+        val mime: String
+    )
 
+    /** Probe an audio file for its format info without decoding. */
+    fun probe(inputPath: String): AudioInfo? {
         val extractor = MediaExtractor()
         return try {
             extractor.setDataSource(inputPath)
+            for (i in 0 until extractor.trackCount) {
+                val format = extractor.getTrackFormat(i)
+                val mime = format.getString(MediaFormat.KEY_MIME) ?: continue
+                if (mime.startsWith("audio/")) {
+                    return AudioInfo(
+                        sampleRate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE),
+                        channels = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT),
+                        durationUs = if (format.containsKey(MediaFormat.KEY_DURATION))
+                            format.getLong(MediaFormat.KEY_DURATION) else 0L,
+                        mime = mime
+                    )
+                }
+            }
+            null
+        } catch (e: Exception) {
+            Log.e(TAG, "Probe failed: ${e.message}")
+            null
+        } finally {
+            extractor.release()
+        }
+    }
 
-            // Find the audio track
+    /** Estimate WAV file size from audio info. */
+    fun estimateWavSize(info: AudioInfo): Long {
+        val totalSamples = info.durationUs * info.sampleRate / 1_000_000L
+        val dataSize = totalSamples * info.channels * 2  // 16-bit
+        return 44 + dataSize  // WAV header + PCM data
+    }
+
+    /**
+     * Stream-process audio: decode → EQ → WAV, writing directly to an OutputStream.
+     * Starts producing output within milliseconds. Runs at 10-50x real-time.
+     *
+     * @param inputPath   Source audio file
+     * @param eq          Parametric EQ (thread-safe: uses a fresh filter state copy)
+     * @param output      Output stream (typically piped to HTTP response)
+     * @param seekToUs    Seek to this position before processing (for Range requests)
+     * @param skipBytes   Skip this many WAV data bytes from the start of output
+     *                    (for Range requests — the header is only written if skipBytes == 0)
+     */
+    fun streamProcess(
+        inputPath: String,
+        eq: ParametricEQ,
+        output: OutputStream,
+        seekToUs: Long = 0,
+        skipBytes: Long = 0
+    ) {
+        val extractor = MediaExtractor()
+        try {
+            extractor.setDataSource(inputPath)
+
             var audioTrackIndex = -1
             var format: MediaFormat? = null
             for (i in 0 until extractor.trackCount) {
@@ -57,210 +92,155 @@ object AudioProcessor {
             }
 
             if (audioTrackIndex < 0 || format == null) {
-                Log.e(TAG, "No audio track found in $inputPath")
-                return false
+                Log.e(TAG, "No audio track in $inputPath")
+                return
             }
 
             extractor.selectTrack(audioTrackIndex)
 
             val sampleRate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
             val channels = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
-            val duration = if (format.containsKey(MediaFormat.KEY_DURATION))
+            val durationUs = if (format.containsKey(MediaFormat.KEY_DURATION))
                 format.getLong(MediaFormat.KEY_DURATION) else 0L
             val mime = format.getString(MediaFormat.KEY_MIME)!!
 
-            Log.d(TAG, "Decoding: $inputPath ($mime, ${sampleRate}Hz, ${channels}ch, ${duration / 1000}ms)")
+            // Create a fresh EQ filter state for this stream (thread-safe)
+            val streamEq = ParametricEQ(sampleRate)
+            streamEq.loadFromJson(eq.toJson())
 
-            // Update EQ sample rate to match source
-            eq.setSampleRate(sampleRate)
-            eq.reset()
+            // Seek if needed
+            if (seekToUs > 0) {
+                extractor.seekTo(seekToUs, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
+            }
 
-            // Create decoder
             val codec = MediaCodec.createDecoderByType(mime)
             codec.configure(format, null, null, 0)
             codec.start()
 
-            val outputFile = File(outputPath)
-            outputFile.parentFile?.mkdirs()
-            val fos = FileOutputStream(outputFile)
+            // Write WAV header (only for full-file requests, not range sub-requests)
+            if (skipBytes == 0L) {
+                val totalSamples = durationUs * sampleRate / 1_000_000L
+                val dataSize = totalSamples * channels * 2
+                writeWavHeaderToStream(output, sampleRate, channels, dataSize)
+            }
 
-            // Write placeholder WAV header (we'll fill in sizes at the end)
-            val headerBuf = ByteArray(44)
-            fos.write(headerBuf)
-
-            var totalSamplesWritten = 0L
+            var bytesWritten = 0L
+            var bytesToSkip = skipBytes
             var inputDone = false
             var outputDone = false
             val bufInfo = MediaCodec.BufferInfo()
-            val totalSamplesEstimate = if (duration > 0)
-                (duration * sampleRate / 1_000_000L) * channels else 1L
 
             while (!outputDone) {
-                // Feed input buffers
+                // Feed input
                 if (!inputDone) {
-                    val inputBufIndex = codec.dequeueInputBuffer(10_000)
-                    if (inputBufIndex >= 0) {
-                        val inputBuffer = codec.getInputBuffer(inputBufIndex)!!
-                        val bytesRead = extractor.readSampleData(inputBuffer, 0)
-                        if (bytesRead < 0) {
-                            codec.queueInputBuffer(inputBufIndex, 0, 0, 0,
-                                MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                    val idx = codec.dequeueInputBuffer(10_000)
+                    if (idx >= 0) {
+                        val buf = codec.getInputBuffer(idx)!!
+                        val read = extractor.readSampleData(buf, 0)
+                        if (read < 0) {
+                            codec.queueInputBuffer(idx, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
                             inputDone = true
                         } else {
-                            val pts = extractor.sampleTime
-                            codec.queueInputBuffer(inputBufIndex, 0, bytesRead, pts, 0)
+                            codec.queueInputBuffer(idx, 0, read, extractor.sampleTime, 0)
                             extractor.advance()
                         }
                     }
                 }
 
-                // Read output buffers
-                val outputBufIndex = codec.dequeueOutputBuffer(bufInfo, 10_000)
-                if (outputBufIndex >= 0) {
+                // Read output
+                val outIdx = codec.dequeueOutputBuffer(bufInfo, 10_000)
+                if (outIdx >= 0) {
                     if (bufInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
                         outputDone = true
                     }
 
-                    val outputBuffer = codec.getOutputBuffer(outputBufIndex)!!
-                    outputBuffer.position(bufInfo.offset)
-                    outputBuffer.limit(bufInfo.offset + bufInfo.size)
-
                     if (bufInfo.size > 0) {
-                        // Convert PCM16 bytes to float samples
-                        val shortBuf = outputBuffer.order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
+                        val outBuf = codec.getOutputBuffer(outIdx)!!
+                        outBuf.position(bufInfo.offset)
+                        outBuf.limit(bufInfo.offset + bufInfo.size)
+
+                        // Decode PCM16 → float
+                        val shortBuf = outBuf.order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
                         val numSamples = shortBuf.remaining()
-                        val floatSamples = FloatArray(numSamples)
+                        val floats = FloatArray(numSamples)
                         for (i in 0 until numSamples) {
-                            floatSamples[i] = shortBuf.get() / 32768f
+                            floats[i] = shortBuf.get() / 32768f
                         }
 
                         // Apply EQ
-                        eq.process(floatSamples, channels)
+                        streamEq.process(floats, channels)
 
-                        // Convert back to PCM16 bytes
-                        val outBytes = ByteArray(numSamples * 2)
-                        val outBuf = ByteBuffer.wrap(outBytes).order(ByteOrder.LITTLE_ENDIAN)
+                        // Float → PCM16 bytes
+                        val pcmBytes = ByteArray(numSamples * 2)
+                        val pcmBuf = ByteBuffer.wrap(pcmBytes).order(ByteOrder.LITTLE_ENDIAN)
                         for (i in 0 until numSamples) {
-                            val clamped = floatSamples[i].coerceIn(-1f, 1f)
-                            outBuf.putShort((clamped * 32767f).toInt().toShort())
+                            pcmBuf.putShort((floats[i].coerceIn(-1f, 1f) * 32767f).toInt().toShort())
                         }
 
-                        fos.write(outBytes)
-                        totalSamplesWritten += numSamples
-
-                        // Progress
-                        if (totalSamplesEstimate > 0) {
-                            val pct = (totalSamplesWritten * 100 / totalSamplesEstimate)
-                                .coerceIn(0, 100).toInt()
-                            onProgress(pct)
+                        // Handle skip (for Range requests)
+                        if (bytesToSkip > 0) {
+                            if (bytesToSkip >= pcmBytes.size) {
+                                bytesToSkip -= pcmBytes.size
+                            } else {
+                                val offset = bytesToSkip.toInt()
+                                output.write(pcmBytes, offset, pcmBytes.size - offset)
+                                bytesWritten += pcmBytes.size - offset
+                                bytesToSkip = 0
+                            }
+                        } else {
+                            output.write(pcmBytes)
+                            bytesWritten += pcmBytes.size
                         }
                     }
 
-                    codec.releaseOutputBuffer(outputBufIndex, false)
+                    codec.releaseOutputBuffer(outIdx, false)
                 }
             }
 
             codec.stop()
             codec.release()
-            fos.flush()
-            fos.close()
+            output.flush()
 
-            // Write actual WAV header
-            val dataSize = totalSamplesWritten * 2  // 16-bit = 2 bytes per sample
-            writeWavHeader(outputPath, sampleRate, channels, dataSize)
-
-            Log.d(TAG, "Processed: $outputPath (${totalSamplesWritten} samples, ${dataSize} bytes)")
-            onProgress(100)
-            true
+            Log.d(TAG, "Streamed $bytesWritten bytes (skipped $skipBytes)")
+        } catch (e: IOException) {
+            // Client disconnected (Sonos stopped reading) — normal
+            Log.d(TAG, "Stream ended (client disconnected): ${e.message}")
         } catch (e: Exception) {
-            Log.e(TAG, "Processing failed: ${e.message}", e)
-            false
+            Log.e(TAG, "Stream processing failed: ${e.message}", e)
         } finally {
             extractor.release()
         }
     }
 
-    /**
-     * Write a standard 44-byte WAV header at the start of the file.
-     */
-    private fun writeWavHeader(path: String, sampleRate: Int, channels: Int, dataSize: Long) {
-        val raf = RandomAccessFile(path, "rw")
+    private fun writeWavHeaderToStream(out: OutputStream, sampleRate: Int, channels: Int, dataSize: Long) {
         val bitsPerSample = 16
         val byteRate = sampleRate * channels * bitsPerSample / 8
         val blockAlign = channels * bitsPerSample / 8
+        val buf = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN)
 
-        raf.seek(0)
-        raf.write("RIFF".toByteArray())
-        raf.writeIntLE((36 + dataSize).toInt())  // Chunk size
-        raf.write("WAVE".toByteArray())
+        buf.put("RIFF".toByteArray())
+        buf.putInt((36 + dataSize).toInt())
+        buf.put("WAVE".toByteArray())
+        buf.put("fmt ".toByteArray())
+        buf.putInt(16)
+        buf.putShort(1) // PCM
+        buf.putShort(channels.toShort())
+        buf.putInt(sampleRate)
+        buf.putInt(byteRate)
+        buf.putShort(blockAlign.toShort())
+        buf.putShort(bitsPerSample.toShort())
+        buf.put("data".toByteArray())
+        buf.putInt(dataSize.toInt())
 
-        // fmt sub-chunk
-        raf.write("fmt ".toByteArray())
-        raf.writeIntLE(16)                       // Sub-chunk size
-        raf.writeShortLE(1)                      // PCM format
-        raf.writeShortLE(channels)               // Channels
-        raf.writeIntLE(sampleRate)                // Sample rate
-        raf.writeIntLE(byteRate)                  // Byte rate
-        raf.writeShortLE(blockAlign)              // Block align
-        raf.writeShortLE(bitsPerSample)           // Bits per sample
-
-        // data sub-chunk
-        raf.write("data".toByteArray())
-        raf.writeIntLE(dataSize.toInt())          // Data size
-
-        raf.close()
+        out.write(buf.array())
     }
 
-    private fun RandomAccessFile.writeIntLE(value: Int) {
-        write(value and 0xFF)
-        write((value shr 8) and 0xFF)
-        write((value shr 16) and 0xFF)
-        write((value shr 24) and 0xFF)
-    }
+    // ── Cache (kept for future background processing) ──────────────────
 
-    private fun RandomAccessFile.writeShortLE(value: Int) {
-        write(value and 0xFF)
-        write((value shr 8) and 0xFF)
-    }
-
-    // ── Cache Management ───────────────────────────────────────────────
-
-    /**
-     * Get the cached processed file path for a given input + EQ settings.
-     * Returns null if not cached.
-     */
-    fun getCachedPath(cacheDir: File, inputPath: String, eq: ParametricEQ): String? {
-        val cached = cacheFile(cacheDir, inputPath, eq)
-        return if (cached.exists()) cached.absolutePath else null
-    }
-
-    /**
-     * Get the path where a processed file would be cached.
-     */
-    fun cacheFile(cacheDir: File, inputPath: String, eq: ParametricEQ): File {
-        val hash = eq.settingsHash()
-        val nameHash = inputPath.hashCode().toUInt().toString(16)
-        val dir = File(cacheDir, "eq-cache")
-        dir.mkdirs()
-        return File(dir, "${nameHash}_${hash}.wav")
-    }
-
-    /**
-     * Clear all cached processed files.
-     */
     fun clearCache(cacheDir: File) {
         val dir = File(cacheDir, "eq-cache")
         if (dir.exists()) {
             dir.listFiles()?.forEach { it.delete() }
-            Log.d(TAG, "EQ cache cleared")
         }
-    }
-
-    /**
-     * Get total cache size in bytes.
-     */
-    fun cacheSize(cacheDir: File): Long {
-        val dir = File(cacheDir, "eq-cache")
-        return dir.listFiles()?.sumOf { it.length() } ?: 0L
     }
 }
