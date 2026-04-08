@@ -95,6 +95,39 @@ class MainActivity : AppCompatActivity() {
         webView.postDelayed({
             webView.loadUrl("http://127.0.0.1:$SERVER_PORT")
         }, 800)
+
+        // Check for OTA updates in background
+        checkForUpdate()
+    }
+
+    private fun checkForUpdate() {
+        val currentVersionCode = try {
+            packageManager.getPackageInfo(packageName, 0).let {
+                if (Build.VERSION.SDK_INT >= 28) it.longVersionCode.toInt()
+                else @Suppress("DEPRECATION") it.versionCode
+            }
+        } catch (_: Exception) { 0 }
+
+        Thread {
+            val update = UpdateChecker.checkForUpdate(currentVersionCode) ?: return@Thread
+            runOnUiThread {
+                android.app.AlertDialog.Builder(this)
+                    .setTitle("Update Available — v${update.versionName}")
+                    .setMessage(update.releaseNotes.ifEmpty { "A new version is available." })
+                    .setPositiveButton("Update Now") { _, _ ->
+                        Toast.makeText(this, "Downloading update…", Toast.LENGTH_SHORT).show()
+                        Thread {
+                            val apk = UpdateChecker.downloadApk(this, update.apkUrl)
+                            runOnUiThread {
+                                if (apk != null) UpdateChecker.installApk(this, apk)
+                                else Toast.makeText(this, "Download failed. Try again later.", Toast.LENGTH_LONG).show()
+                            }
+                        }.start()
+                    }
+                    .setNegativeButton("Later", null)
+                    .show()
+            }
+        }.start()
     }
 
     @Suppress("DEPRECATION")
