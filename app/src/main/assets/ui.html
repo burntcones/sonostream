@@ -1328,6 +1328,13 @@ async function fetchStatus() {
     isPlaying = newState === 'PLAYING';
     if (wasPlaying !== isPlaying) updatePlayIcon();
 
+    // Push to Android MediaSession (notification mini player)
+    if (typeof window.NativeMedia !== 'undefined') {
+      const track = data.position?.track || $('trackName').textContent || '';
+      const speaker = selectedSpeakers[0]?.name || '';
+      window.NativeMedia.updatePlayback(track, speaker, isPlaying, pos * 1000, dur * 1000);
+    }
+
     // Auto-advance: track finished (was PLAYING, now STOPPED, position near duration)
     if (!autoAdvancing && lastPlayState === 'PLAYING' && newState === 'STOPPED' && dur > 0 && (dur - pos) < 5 && queue.length > 0) {
       autoAdvancing = true;

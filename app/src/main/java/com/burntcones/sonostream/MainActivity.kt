@@ -21,10 +21,18 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val RC_PERMS = 100
         const val SERVER_PORT = 8077
+        var instance: MainActivity? = null
+            private set
+    }
+
+    /** Run JavaScript in the WebView (used by StreamerService for media button callbacks). */
+    fun evaluateJs(js: String) {
+        webView.evaluateJavascript(js, null)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        instance = this
 
         webView = WebView(this).apply {
             settings.javaScriptEnabled = true
@@ -35,6 +43,7 @@ class MainActivity : AppCompatActivity() {
             webViewClient = WebViewClient()
             webChromeClient = WebChromeClient()
             addJavascriptInterface(UpdateBridge(this@MainActivity), "NativeUpdate")
+            addJavascriptInterface(MediaBridge(), "NativeMedia")
         }
         setContentView(webView)
 
@@ -149,8 +158,20 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        instance = null
         multicastLock?.release()
         super.onDestroy()
+    }
+
+    /**
+     * JavaScript bridge for media session updates.
+     * Called from WebView when playback state changes.
+     */
+    class MediaBridge {
+        @JavascriptInterface
+        fun updatePlayback(trackTitle: String, speakerName: String, isPlaying: Boolean, positionMs: Long, durationMs: Long) {
+            StreamerService.instance?.updatePlaybackState(trackTitle, speakerName, isPlaying, positionMs, durationMs)
+        }
     }
 
     /**
