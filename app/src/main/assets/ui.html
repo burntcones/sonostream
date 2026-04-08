@@ -773,6 +773,18 @@ html, body {
 
   <!-- Speaker Sheet -->
   <div class="sheet-overlay" id="sheetOverlay"></div>
+  <!-- Debug Log Panel (long-press logo to toggle) -->
+  <div id="debugPanel" style="display:none;position:fixed;inset:0;z-index:200;background:var(--bg);overflow-y:auto;padding:16px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+      <h2 style="font-size:16px;">Debug Logs</h2>
+      <div style="display:flex;gap:8px;">
+        <button onclick="refreshDebugLogs()" style="padding:6px 12px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text);font-size:12px;">Refresh</button>
+        <button onclick="$('debugPanel').style.display='none'" style="padding:6px 12px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text);font-size:12px;">Close</button>
+      </div>
+    </div>
+    <pre id="debugContent" style="font-size:11px;color:var(--text2);white-space:pre-wrap;word-break:break-all;font-family:monospace;line-height:1.6;"></pre>
+  </div>
+
   <div class="sheet" id="speakerSheet">
     <div class="sheet-handle"></div>
     <div class="sheet-title">
@@ -800,6 +812,10 @@ let polling = false;
 let queue = [];
 let queueIndex = -1;
 let lastPlayState = null;
+
+function isLocalSpeaker(sp) { return sp && sp.ip === 'local'; }
+function hasLocalSpeaker() { return selectedSpeakers.some(isLocalSpeaker); }
+function sonosSpeakers() { return selectedSpeakers.filter(s => !isLocalSpeaker(s)); }
 let autoAdvancing = false;
 let sortMode = 'name';
 let collapsedFolders = new Set();
@@ -1087,12 +1103,19 @@ async function playFile(path, buildQueue = true) {
 
   try {
     let result;
-    if (selectedSpeakers.length > 1) {
-      result = await api('POST', '/api/play-multi', { speakers: selectedSpeakers.map(s => s.name), file: path });
-    } else {
-      result = await api('POST', '/api/play', { speaker: selectedSpeakers[0].name, file: path });
+    const local = selectedSpeakers.find(isLocalSpeaker);
+    const sonos = sonosSpeakers();
+    // Play on local device if selected
+    if (local) {
+      result = await api('POST', '/api/local/play', { file: path });
     }
-    if (result.success === false) {
+    // Play on Sonos speakers
+    if (sonos.length > 1) {
+      result = await api('POST', '/api/play-multi', { speakers: sonos.map(s => s.name), file: path });
+    } else if (sonos.length === 1) {
+      result = await api('POST', '/api/play', { speaker: sonos[0].name, file: path });
+    }
+    if (result && result.success === false) {
       showToast('Speaker could not play this file.', 'error');
       return;
     }
@@ -1108,10 +1131,12 @@ async function togglePlay() {
   if (!selectedSpeakers.length) return;
   const action = isPlaying ? 'Pause' : 'Play';
   try {
-    if (selectedSpeakers.length > 1) {
-      await api('POST', '/api/control-multi', { speakers: selectedSpeakers.map(s => s.name), action });
-    } else {
-      await api('POST', '/api/control', { speaker: selectedSpeakers[0].name, action });
+    if (hasLocalSpeaker()) await api('POST', '/api/local/control', { action });
+    const sonos = sonosSpeakers();
+    if (sonos.length > 1) {
+      await api('POST', '/api/control-multi', { speakers: sonos.map(s => s.name), action });
+    } else if (sonos.length === 1) {
+      await api('POST', '/api/control', { speaker: sonos[0].name, action });
     }
     isPlaying = !isPlaying;
     updatePlayIcon();
@@ -1123,10 +1148,12 @@ async function togglePlay() {
 async function stop() {
   if (!selectedSpeakers.length) return;
   try {
-    if (selectedSpeakers.length > 1) {
-      await api('POST', '/api/control-multi', { speakers: selectedSpeakers.map(s => s.name), action: 'Stop' });
-    } else {
-      await api('POST', '/api/control', { speaker: selectedSpeakers[0].name, action: 'Stop' });
+    if (hasLocalSpeaker()) await api('POST', '/api/local/control', { action: 'Stop' });
+    const sonos = sonosSpeakers();
+    if (sonos.length > 1) {
+      await api('POST', '/api/control-multi', { speakers: sonos.map(s => s.name), action: 'Stop' });
+    } else if (sonos.length === 1) {
+      await api('POST', '/api/control', { speaker: sonos[0].name, action: 'Stop' });
     }
     isPlaying = false;
     updatePlayIcon();
@@ -1181,23 +1208,33 @@ function renderVolumeControls() {
 
   el.querySelectorAll('.volume-slider').forEach(slider => {
     let interacting = false;
+    let guardTimer = null;
     slider.addEventListener('input', e => {
       interacting = true;
+      // Clear any pending guard expiry from a previous interaction
+      if (guardTimer) { clearTimeout(guardTimer); guardTimer = null; }
       const label = el.querySelector(`[data-vol-label="${e.target.dataset.speaker}"]`);
       if (label) label.textContent = e.target.value;
       clearTimeout(slider._volTimeout);
       slider._volTimeout = setTimeout(() => {
-        api('POST', '/api/volume', { speaker: e.target.dataset.speaker, volume: +e.target.value })
+        const speakerName = e.target.dataset.speaker;
+        const volume = +e.target.value;
+        const sp = selectedSpeakers.find(s => s.name === speakerName);
+        const isLocal = sp && sp.ip === 'local';
+        const url = isLocal ? '/api/local/volume' : '/api/volume';
+        const body = isLocal ? { volume } : { speaker: speakerName, volume };
+        api('POST', url, body)
           .then(r => {
-            if (r.success === false) showToast(`Vol failed: ${JSON.stringify(r)}`, 'error');
+            if (r.success === false) showToast(`Vol failed (${speakerName}): ${JSON.stringify(r)}`, 'error');
           })
-          .catch(err => showToast(`Vol error: ${err.message}`, 'error'));
+          .catch(err => showToast(`Vol error (${speakerName}): ${err.message}`, 'error'));
       }, 150);
     });
     slider.addEventListener('change', () => {
       // Keep guard active for 5s after release — gives SOAP call time to
       // propagate and the next poll to read the new value back
-      setTimeout(() => { interacting = false; }, 5000);
+      if (guardTimer) clearTimeout(guardTimer);
+      guardTimer = setTimeout(() => { interacting = false; }, 5000);
     });
     slider._interacting = () => interacting;
   });
@@ -1214,7 +1251,12 @@ $('progressBar').addEventListener('click', e => {
   const pos = `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
   // Seek on all selected speakers
   selectedSpeakers.forEach(sp => {
-    api('POST', '/api/seek', { speaker: sp.name, position: pos });
+    if (isLocalSpeaker(sp)) {
+      const seekMs = seekSec * 1000;
+      api('POST', '/api/local/seek', { position_ms: seekMs });
+    } else {
+      api('POST', '/api/seek', { speaker: sp.name, position: pos });
+    }
   });
 });
 
@@ -1241,7 +1283,10 @@ async function fetchStatus() {
   if (!selectedSpeakers.length) return;
   try {
     const primary = selectedSpeakers[0];
-    const data = await api('GET', `/api/status/${encodeURIComponent(primary.name)}`);
+    const isPrimaryLocal = isLocalSpeaker(primary);
+    const data = isPrimaryLocal
+      ? await api('GET', '/api/local/status')
+      : await api('GET', `/api/status/${encodeURIComponent(primary.name)}`);
     pollFailCount = 0;
 
     // Update volume slider for primary speaker
@@ -1285,7 +1330,9 @@ async function fetchStatus() {
     // Fetch volume for other selected speakers (non-blocking)
     selectedSpeakers.slice(1).forEach(async sp => {
       try {
-        const spData = await api('GET', `/api/status/${encodeURIComponent(sp.name)}`);
+        const spData = isLocalSpeaker(sp)
+          ? await api('GET', '/api/local/status')
+          : await api('GET', `/api/status/${encodeURIComponent(sp.name)}`);
         if (spData.volume != null) {
           const el = $('volumeControls');
           const slider = el.querySelector(`[data-speaker="${sp.name}"]`);
@@ -1365,6 +1412,51 @@ function pollNext() {
 function stopPolling() {
   polling = false;
   if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+}
+
+// ─── Debug Panel (long-press logo) ─────────────────────────────────────────
+let debugLongPress = null;
+document.querySelector('.logo').addEventListener('touchstart', () => {
+  debugLongPress = setTimeout(() => {
+    $('debugPanel').style.display = 'block';
+    refreshDebugLogs();
+  }, 1500);
+});
+document.querySelector('.logo').addEventListener('touchend', () => clearTimeout(debugLongPress));
+document.querySelector('.logo').addEventListener('touchcancel', () => clearTimeout(debugLongPress));
+// Also support mouse long-press for desktop testing
+document.querySelector('.logo').addEventListener('mousedown', () => {
+  debugLongPress = setTimeout(() => {
+    $('debugPanel').style.display = 'block';
+    refreshDebugLogs();
+  }, 1500);
+});
+document.querySelector('.logo').addEventListener('mouseup', () => clearTimeout(debugLongPress));
+
+async function refreshDebugLogs() {
+  try {
+    const data = await api('GET', '/api/debug');
+    let content = '=== SPEAKERS ===\n';
+    if (data.speakers) {
+      data.speakers.forEach(sp => {
+        content += `${sp.name}\n  ip=${sp.ip}:${sp.port}\n  controlUrl=${sp.controlUrl}\n  renderingUrl=${sp.renderingUrl}\n  uuid=${sp.uuid}\n\n`;
+      });
+    }
+    content += `\n=== DISCOVERY ===\n${data.diagnostics || 'none'}\n`;
+    content += `\n=== SOAP LOGS (recent) ===\n`;
+    if (data.soap_logs && data.soap_logs.length) {
+      data.soap_logs.forEach(l => { content += l + '\n'; });
+    } else {
+      content += '(no SOAP calls logged yet)\n';
+    }
+    content += `\n=== UI STATE ===\n`;
+    content += `selectedSpeakers: ${JSON.stringify(selectedSpeakers.map(s => ({name:s.name,ip:s.ip})))}\n`;
+    content += `isPlaying: ${isPlaying}\n`;
+    content += `pollFailCount: ${pollFailCount}\n`;
+    $('debugContent').textContent = content;
+  } catch (e) {
+    $('debugContent').textContent = 'Error fetching debug info: ' + e.message;
+  }
 }
 
 // ─── Init ───────────────────────────────────────────────────────────────────

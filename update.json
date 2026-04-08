@@ -1,6 +1,6 @@
 {
-  "versionCode": 3,
-  "versionName": "1.1.1",
-  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v1.1.1/app-debug.apk",
-  "releaseNotes": "Volume slider diagnostic: shows toast on SetVolume failure. Extended interaction guard to 5s."
+  "versionCode": 5,
+  "versionName": "1.2.0",
+  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v1.2.0/app-debug.apk",
+  "releaseNotes": "Volume slider fix, OTA update fix, This Device routing, debug panel"
 }

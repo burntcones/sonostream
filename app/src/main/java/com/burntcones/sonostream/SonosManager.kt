@@ -62,6 +62,20 @@ object SonosManager {
     var lastDiagnostics: String = "No scan attempted yet"
         private set
 
+    /** Ring buffer of recent SOAP call logs (visible via /api/debug) */
+    private val soapLogs = java.util.concurrent.ConcurrentLinkedDeque<String>()
+    private const val MAX_SOAP_LOGS = 50
+
+    private fun logSoap(msg: String) {
+        val ts = java.text.SimpleDateFormat("HH:mm:ss.SSS", java.util.Locale.US).format(java.util.Date())
+        val entry = "[$ts] $msg"
+        soapLogs.addLast(entry)
+        while (soapLogs.size > MAX_SOAP_LOGS) soapLogs.pollFirst()
+        Log.d(TAG, msg)
+    }
+
+    fun getSoapLogs(): List<String> = soapLogs.toList()
+
     /**
      * Find the WiFi Network and IPv4 address. Does NOT require WiFi to be
      * the "active" (default) network — scans ALL networks for TRANSPORT_WIFI.
@@ -429,8 +443,8 @@ object SonosManager {
                         "controlURL" -> svcCtrl = s.textContent ?: ""
                     }
                 }
-                if ("AVTransport" in svcType) controlUrl = svcCtrl
-                if ("RenderingControl" in svcType) renderingUrl = svcCtrl
+                if (svcType == AVT) controlUrl = svcCtrl
+                if (svcType == RC) renderingUrl = svcCtrl
             }
 
             Log.d(TAG, "Parsed device: name=$name model=$model uuid=${uuid.take(12)} controlUrl=$controlUrl")
@@ -511,9 +525,9 @@ object SonosManager {
     fun setVolume(speaker: SonosSpeaker, volume: Int): Boolean {
         val vol = volume.coerceIn(0, 100)
         val args = "<InstanceID>0</InstanceID><Channel>Master</Channel><DesiredVolume>$vol</DesiredVolume>"
-        Log.d(TAG, "SetVolume: ${speaker.name} → $vol, url=${speaker.renderingUrl}, ip=${speaker.ip}:${speaker.port}")
+        logSoap("SetVolume: ${speaker.name} → $vol, url=http://${speaker.ip}:${speaker.port}${speaker.renderingUrl}")
         val (status, data) = soap(speaker, speaker.renderingUrl, RC, "SetVolume", args)
-        Log.d(TAG, "SetVolume result: status=$status, response=${data.take(200)}")
+        logSoap("SetVolume result: status=$status, response=${data.take(300)}")
         return status == 200
     }
 
@@ -522,8 +536,13 @@ object SonosManager {
         val (status, data) = soap(speaker, speaker.renderingUrl, RC, "GetVolume", args, timeoutMs = 2000)
         if (status == 200) {
             val m = Pattern.compile("<CurrentVolume>(\\d+)</CurrentVolume>").matcher(data)
-            if (m.find()) return m.group(1)!!.toInt()
+            if (m.find()) {
+                val vol = m.group(1)!!.toInt()
+                logSoap("GetVolume: ${speaker.name} = $vol")
+                return vol
+            }
         }
+        logSoap("GetVolume FAILED: ${speaker.name}, status=$status, data=${data.take(200)}")
         return 50
     }
 

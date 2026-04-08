@@ -1,7 +1,10 @@
 package com.burntcones.sonostream
 
 import android.app.Activity
+import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.util.Log
 import androidx.core.content.FileProvider
 import org.json.JSONObject
@@ -39,14 +42,54 @@ object UpdateChecker {
     )
 
     /**
+     * Find a network with validated internet access (typically cellular).
+     * This bypasses bindProcessToNetwork(wifiNetwork) which routes all traffic
+     * over a local WiFi network that may have no internet.
+     */
+    private fun findInternetNetwork(context: Context?): android.net.Network? {
+        if (context == null) return null
+        return try {
+            val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            cm.allNetworks.firstOrNull { net ->
+                val caps = cm.getNetworkCapabilities(net) ?: return@firstOrNull false
+                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                    && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not find internet network: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Open an HTTP connection that bypasses process-level network binding.
+     * Uses a validated internet network (cellular) if available, otherwise
+     * falls back to the default (process-bound) connection.
+     */
+    private fun openConnection(url: URL, context: Context?): HttpURLConnection {
+        val internetNet = findInternetNetwork(context)
+        return if (internetNet != null) {
+            Log.d(TAG, "Using internet network (bypassing WiFi binding) for: $url")
+            internetNet.openConnection(url) as HttpURLConnection
+        } else {
+            Log.d(TAG, "No separate internet network found, using default for: $url")
+            url.openConnection() as HttpURLConnection
+        }
+    }
+
+    /**
      * Check if an update is available. Returns UpdateInfo if newer version exists, null otherwise.
      * Must be called from a background thread.
+     *
+     * @param context Pass a Context so the check can route over cellular/internet
+     *                even when the process is bound to a local WiFi network.
      */
-    fun checkForUpdate(currentVersionCode: Int): UpdateInfo? {
+    fun checkForUpdate(currentVersionCode: Int, context: Context? = null): UpdateInfo? {
         return try {
-            val conn = URL(manifestUrl).openConnection() as HttpURLConnection
-            conn.connectTimeout = 5000
-            conn.readTimeout = 5000
+            val url = URL(manifestUrl)
+            val conn = openConnection(url, context)
+            conn.connectTimeout = 8000
+            conn.readTimeout = 8000
             conn.setRequestProperty("Cache-Control", "no-cache")
 
             if (conn.responseCode != 200) {
@@ -78,6 +121,9 @@ object UpdateChecker {
     /**
      * Download the APK to cache and return the File. Must be called from a background thread.
      * Returns null on failure.
+     *
+     * @param context Used both for cache dir and to route the download over
+     *                an internet-capable network.
      */
     fun downloadApk(activity: Activity, apkUrl: String, onProgress: (Int) -> Unit = {}): File? {
         return try {
@@ -87,7 +133,8 @@ object UpdateChecker {
             if (apkFile.exists()) apkFile.delete()
 
             Log.d(TAG, "Downloading APK from $apkUrl")
-            val conn = URL(apkUrl).openConnection() as HttpURLConnection
+            val url = URL(apkUrl)
+            val conn = openConnection(url, activity)
             conn.connectTimeout = 10000
             conn.readTimeout = 30000
 

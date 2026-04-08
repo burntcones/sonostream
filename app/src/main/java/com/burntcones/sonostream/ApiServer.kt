@@ -73,6 +73,19 @@ class ApiServer(
                         put("diagnostics", SonosManager.lastDiagnostics)
                         put("speaker_count", SonosManager.speakers.size)
                         put("local_ip", getLocalIp())
+                        put("speakers", org.json.JSONArray().apply {
+                            SonosManager.speakers.forEach { (name, sp) ->
+                                put(JSONObject().apply {
+                                    put("name", name)
+                                    put("ip", sp.ip)
+                                    put("port", sp.port)
+                                    put("controlUrl", sp.controlUrl)
+                                    put("renderingUrl", sp.renderingUrl)
+                                    put("uuid", sp.uuid)
+                                })
+                            }
+                        })
+                        put("soap_logs", org.json.JSONArray(SonosManager.getSoapLogs()))
                     })
                 }
 
@@ -90,7 +103,7 @@ class ApiServer(
                     val pInfo = context.packageManager.getPackageInfo(context.packageName, 0)
                     val versionCode = if (android.os.Build.VERSION.SDK_INT >= 28)
                         pInfo.longVersionCode.toInt() else @Suppress("DEPRECATION") pInfo.versionCode
-                    val update = UpdateChecker.checkForUpdate(versionCode)
+                    val update = UpdateChecker.checkForUpdate(versionCode, context)
                     jsonResponse(JSONObject().apply {
                         put("available", update != null)
                         put("current_version", pInfo.versionName)

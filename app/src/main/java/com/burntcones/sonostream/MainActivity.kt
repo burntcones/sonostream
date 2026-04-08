@@ -113,7 +113,7 @@ class MainActivity : AppCompatActivity() {
             // Delay to let the UI load first
             Thread.sleep(3000)
             Log.d("UpdateChecker", "Checking for updates... current=$currentVersionCode")
-            val update = UpdateChecker.checkForUpdate(currentVersionCode)
+            val update = UpdateChecker.checkForUpdate(currentVersionCode, this)
             if (update == null) {
                 Log.d("UpdateChecker", "No update available (or check failed)")
                 return@Thread
