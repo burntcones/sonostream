@@ -1918,9 +1918,17 @@ async function refreshDebugLogs() {
     } else {
       content += '(no SOAP calls logged yet)\n';
     }
+    content += `\n=== EQ STREAM LOG ===\n`;
+    content += `EQ active: ${data.eq_active}, bands: ${data.eq_bands}, version: ${data.eq_version}\n`;
+    if (data.eq_log && data.eq_log.length) {
+      data.eq_log.forEach(l => { content += l + '\n'; });
+    } else {
+      content += '(no EQ stream activity yet)\n';
+    }
     content += `\n=== UI STATE ===\n`;
     content += `selectedSpeakers: ${JSON.stringify(selectedSpeakers.map(s => ({name:s.name,ip:s.ip})))}\n`;
     content += `isPlaying: ${isPlaying}\n`;
+    content += `currentFile: ${currentFile || 'none'}\n`;
     content += `pollFailCount: ${pollFailCount}\n`;
     $('debugContent').textContent = content;
   } catch (e) {

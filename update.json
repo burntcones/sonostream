@@ -1,6 +1,6 @@
 {
-  "versionCode": 10,
-  "versionName": "1.6.0",
-  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v1.6.0/sonostream.apk",
-  "releaseNotes": "Live streaming EQ (changes apply mid-stream), media notification controls fixed, EQ tap popup fixed"
+  "versionCode": 11,
+  "versionName": "1.6.1",
+  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v1.6.1/sonostream.apk",
+  "releaseNotes": "EQ stream diagnostics — debug panel now shows decode/stream log"
 }

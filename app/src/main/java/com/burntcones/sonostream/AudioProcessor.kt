@@ -15,6 +15,28 @@ import java.nio.ByteOrder
 object AudioProcessor {
 
     private const val TAG = "AudioProcessor"
+    private const val MAX_LOG_ENTRIES = 30
+
+    /** Visible diagnostics log — shown in debug panel. */
+    private val logEntries = mutableListOf<String>()
+
+    fun getLog(): List<String> = synchronized(logEntries) { logEntries.toList() }
+
+    private fun log(msg: String) {
+        Log.d(TAG, msg)
+        synchronized(logEntries) {
+            logEntries.add("[${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date())}] $msg")
+            while (logEntries.size > MAX_LOG_ENTRIES) logEntries.removeAt(0)
+        }
+    }
+
+    private fun logErr(msg: String, e: Exception? = null) {
+        Log.e(TAG, msg, e)
+        synchronized(logEntries) {
+            logEntries.add("[${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date())}] ERROR: $msg${if (e != null) " — ${e.message}" else ""}")
+            while (logEntries.size > MAX_LOG_ENTRIES) logEntries.removeAt(0)
+        }
+    }
 
     data class AudioInfo(
         val sampleRate: Int,
@@ -79,9 +101,12 @@ object AudioProcessor {
         seekToUs: Long = 0,
         skipBytes: Long = 0
     ) {
+        val fileName = java.io.File(inputPath).name
+        log("Stream START: $fileName (seek=${seekToUs}us, skip=${skipBytes}b)")
         val extractor = MediaExtractor()
         try {
             extractor.setDataSource(inputPath)
+            log("Extractor opened: ${extractor.trackCount} tracks")
 
             var audioTrackIndex = -1
             var format: MediaFormat? = null
@@ -96,7 +121,7 @@ object AudioProcessor {
             }
 
             if (audioTrackIndex < 0 || format == null) {
-                Log.e(TAG, "No audio track in $inputPath")
+                logErr("No audio track in $fileName")
                 return
             }
 
@@ -108,10 +133,13 @@ object AudioProcessor {
                 format.getLong(MediaFormat.KEY_DURATION) else 0L
             val mime = format.getString(MediaFormat.KEY_MIME)!!
 
+            log("Format: $mime ${sampleRate}Hz ${channels}ch ${durationUs/1_000_000}s")
+
             // Local EQ with correct sample rate — syncs from liveEq on version changes
             val streamEq = ParametricEQ(sampleRate)
             var lastEqVersion = liveEq.version
             syncEqParams(streamEq, liveEq)
+            log("EQ: ${streamEq.getBandCount()} bands, bypass=${streamEq.bypass}")
 
             // Seek if needed
             if (seekToUs > 0) {
@@ -121,6 +149,7 @@ object AudioProcessor {
             val codec = MediaCodec.createDecoderByType(mime)
             codec.configure(format, null, null, 0)
             codec.start()
+            log("Codec started: $mime")
 
             // Write WAV header (only for full-file requests, not range sub-requests)
             if (skipBytes == 0L) {
@@ -214,12 +243,12 @@ object AudioProcessor {
             codec.release()
             output.flush()
 
-            Log.d(TAG, "Streamed $bytesWritten bytes (skipped $skipBytes)")
+            log("Stream DONE: $fileName — ${bytesWritten} bytes written")
         } catch (e: IOException) {
             // Client disconnected (Sonos stopped reading) — normal
-            Log.d(TAG, "Stream ended (client disconnected): ${e.message}")
+            log("Stream ended (client disconnected): ${e.message}")
         } catch (e: Exception) {
-            Log.e(TAG, "Stream processing failed: ${e.message}", e)
+            logErr("Stream FAILED: $fileName", e)
         } finally {
             extractor.release()
         }

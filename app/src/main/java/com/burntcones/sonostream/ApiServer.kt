@@ -94,6 +94,10 @@ class ApiServer(
                             }
                         })
                         put("soap_logs", org.json.JSONArray(SonosManager.getSoapLogs()))
+                        put("eq_log", org.json.JSONArray(AudioProcessor.getLog()))
+                        put("eq_active", !eq.bypass)
+                        put("eq_bands", eq.getBands().size)
+                        put("eq_version", eq.version)
                     })
                 }
 
@@ -503,7 +507,9 @@ class ApiServer(
                             skipBytes = dataOffset - (sampleOffset * bytesPerSample) // align to sample boundary
                         )
                     }
-                } catch (_: Exception) {}
+                } catch (e: Exception) {
+                    android.util.Log.e("ApiServer", "EQ stream range error", e)
+                }
                 try { pipeOut.close() } catch (_: Exception) {}
             }.start()
 
@@ -518,7 +524,9 @@ class ApiServer(
         Thread {
             try {
                 AudioProcessor.streamProcess(file.absolutePath, eq, pipeOut)
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                android.util.Log.e("ApiServer", "EQ stream error", e)
+            }
             try { pipeOut.close() } catch (_: Exception) {}
         }.start()
 
