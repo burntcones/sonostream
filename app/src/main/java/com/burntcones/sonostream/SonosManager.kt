@@ -53,6 +53,9 @@ object SonosManager {
     var speakers: MutableMap<String, SonosSpeaker> = mutableMapOf()
         private set
 
+    /** WiFi Network object, used to route SOAP calls over WiFi when cellular is default */
+    private var wifiNet: android.net.Network? = null
+
     private const val TAG = "SonosManager"
 
     /** Diagnostic info from the last discovery attempt */
@@ -163,134 +166,121 @@ object SonosManager {
 
         val localAddr = wifiInfo.address
         val wifiNetwork = wifiInfo.network
+        wifiNet = wifiNetwork  // Store for SOAP calls
         diag.append("Using WiFi IP: ${localAddr.hostAddress}\n")
 
         // If we have a Network object, bind the process to it so ALL sockets
-        // go over WiFi (critical when cellular is the default network)
+        // (discovery + subsequent SOAP calls) go over WiFi
         val cm = context?.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-        val previousNetwork = if (wifiNetwork != null && cm != null) {
-            val prev = cm.activeNetwork
+        if (wifiNetwork != null && cm != null) {
             cm.bindProcessToNetwork(wifiNetwork)
             diag.append("Bound process to WiFi network\n")
             Log.d(TAG, "Bound process to WiFi network")
-            prev
-        } else null
+        }
+
+        // ── SSDP Discovery ──
+        val msg = "M-SEARCH * HTTP/1.1\r\n" +
+            "HOST: $SSDP_ADDR:$SSDP_PORT\r\n" +
+            "MAN: \"ssdp:discover\"\r\n" +
+            "MX: 3\r\n" +
+            "ST: urn:schemas-upnp-org:device:ZonePlayer:1\r\n" +
+            "\r\n"
 
         try {
-            // ── SSDP Discovery ──
-            val msg = "M-SEARCH * HTTP/1.1\r\n" +
-                "HOST: $SSDP_ADDR:$SSDP_PORT\r\n" +
-                "MAN: \"ssdp:discover\"\r\n" +
-                "MX: 3\r\n" +
-                "ST: urn:schemas-upnp-org:device:ZonePlayer:1\r\n" +
-                "\r\n"
-
-            try {
-                val sock = DatagramSocket(null).apply {
-                    reuseAddress = true
-                    soTimeout = timeoutMs
-                    bind(InetSocketAddress(localAddr, 0))
-                }
-
-                diag.append("SSDP socket bound to ${sock.localAddress.hostAddress}:${sock.localPort}\n")
-                Log.d(TAG, "SSDP bound to ${sock.localAddress.hostAddress}:${sock.localPort}")
-
-                val group = InetAddress.getByName(SSDP_ADDR)
-                val sendData = msg.toByteArray()
-                val packet = DatagramPacket(sendData, sendData.size, group, SSDP_PORT)
-
-                for (i in 1..3) {
-                    sock.send(packet)
-                    if (i < 3) Thread.sleep(200)
-                }
-                diag.append("Sent 3 M-SEARCH packets\n")
-                Log.d(TAG, "Sent 3 M-SEARCH packets")
-
-                val deadline = System.currentTimeMillis() + timeoutMs
-                val buf = ByteArray(4096)
-                var responseCount = 0
-
-                while (System.currentTimeMillis() < deadline) {
-                    try {
-                        val pkt = DatagramPacket(buf, buf.size)
-                        sock.receive(pkt)
-                        responseCount++
-                        val response = String(pkt.data, 0, pkt.length)
-                        Log.d(TAG, "SSDP response #$responseCount from ${pkt.address?.hostAddress}")
-
-                        val locMatch = Pattern.compile("LOCATION:\\s*(.*?)\\r?\\n", Pattern.CASE_INSENSITIVE).matcher(response)
-                        if (locMatch.find()) {
-                            val location = locMatch.group(1)!!.trim()
-                            if (location !in found.values.map { it.location }) {
-                                fetchDeviceInfo(location)?.let {
-                                    Log.d(TAG, "SSDP found: ${it.name} @ ${it.ip}")
-                                    found[it.name] = it
-                                }
-                            }
-                        }
-                    } catch (_: SocketTimeoutException) {
-                        break
-                    }
-                }
-                sock.close()
-                diag.append("SSDP: $responseCount responses, ${found.size} speakers\n")
-            } catch (e: Exception) {
-                diag.append("SSDP failed: ${e.message}\n")
-                Log.e(TAG, "SSDP failed", e)
+            val sock = DatagramSocket(null).apply {
+                reuseAddress = true
+                soTimeout = timeoutMs
+                bind(InetSocketAddress(localAddr, 0))
             }
 
-            // ── Subnet scan fallback ──
-            if (found.isEmpty()) {
-                diag.append("SSDP found nothing — scanning subnet\n")
-                Log.d(TAG, "Falling back to subnet scan")
+            diag.append("SSDP socket bound to ${sock.localAddress.hostAddress}:${sock.localPort}\n")
+            Log.d(TAG, "SSDP bound to ${sock.localAddress.hostAddress}:${sock.localPort}")
 
-                val ipParts = localAddr.hostAddress?.split(".") ?: emptyList()
-                if (ipParts.size == 4) {
-                    val subnet = "${ipParts[0]}.${ipParts[1]}.${ipParts[2]}"
-                    diag.append("Scanning $subnet.1-254 on port 1400\n")
+            val group = InetAddress.getByName(SSDP_ADDR)
+            val sendData = msg.toByteArray()
+            val packet = DatagramPacket(sendData, sendData.size, group, SSDP_PORT)
 
-                    val subnetFound = ConcurrentHashMap<String, SonosSpeaker>()
-                    val openPorts = ConcurrentHashMap<String, Boolean>()
-                    val executor = Executors.newFixedThreadPool(30)
+            for (i in 1..3) {
+                sock.send(packet)
+                if (i < 3) Thread.sleep(200)
+            }
+            diag.append("Sent 3 M-SEARCH packets\n")
+            Log.d(TAG, "Sent 3 M-SEARCH packets")
 
-                    for (i in 1..254) {
-                        executor.submit {
-                            val ip = "$subnet.$i"
-                            try {
-                                val socket = Socket()
-                                // Bind socket to WiFi network if available
-                                if (wifiNetwork != null) {
-                                    wifiNetwork.bindSocket(socket)
-                                }
-                                socket.connect(InetSocketAddress(ip, 1400), 400)
-                                socket.close()
-                                openPorts[ip] = true
-                                Log.d(TAG, "Port 1400 open: $ip")
-                                val speaker = fetchDeviceInfo("http://$ip:1400/xml/device_description.xml")
-                                if (speaker != null) {
-                                    Log.d(TAG, "Subnet found: ${speaker.name} @ $ip")
-                                    subnetFound[speaker.name] = speaker
-                                }
-                            } catch (_: Exception) {
-                                // Not reachable or not Sonos
+            val deadline = System.currentTimeMillis() + timeoutMs
+            val buf = ByteArray(4096)
+            var responseCount = 0
+
+            while (System.currentTimeMillis() < deadline) {
+                try {
+                    val pkt = DatagramPacket(buf, buf.size)
+                    sock.receive(pkt)
+                    responseCount++
+                    val response = String(pkt.data, 0, pkt.length)
+                    Log.d(TAG, "SSDP response #$responseCount from ${pkt.address?.hostAddress}")
+
+                    val locMatch = Pattern.compile("LOCATION:\\s*(.*?)\\r?\\n", Pattern.CASE_INSENSITIVE).matcher(response)
+                    if (locMatch.find()) {
+                        val location = locMatch.group(1)!!.trim()
+                        if (location !in found.values.map { it.location }) {
+                            fetchDeviceInfo(location)?.let {
+                                Log.d(TAG, "SSDP found: ${it.name} @ ${it.ip}")
+                                found[it.name] = it
                             }
                         }
                     }
-
-                    executor.shutdown()
-                    executor.awaitTermination(10, TimeUnit.SECONDS)
-                    found.putAll(subnetFound)
-                    diag.append("Subnet scan: ${openPorts.size} hosts with port 1400 open, ${subnetFound.size} Sonos speakers\n")
-                } else {
-                    diag.append("Could not parse subnet from IP: ${localAddr.hostAddress}\n")
+                } catch (_: SocketTimeoutException) {
+                    break
                 }
             }
-        } finally {
-            // Restore previous network binding
-            if (previousNetwork != null && cm != null) {
-                cm.bindProcessToNetwork(previousNetwork)
-            } else if (wifiNetwork != null && cm != null) {
-                cm.bindProcessToNetwork(null)
+            sock.close()
+            diag.append("SSDP: $responseCount responses, ${found.size} speakers\n")
+        } catch (e: Exception) {
+            diag.append("SSDP failed: ${e.message}\n")
+            Log.e(TAG, "SSDP failed", e)
+        }
+
+        // ── Subnet scan fallback ──
+        if (found.isEmpty()) {
+            diag.append("SSDP found nothing — scanning subnet\n")
+            Log.d(TAG, "Falling back to subnet scan")
+
+            val ipParts = localAddr.hostAddress?.split(".") ?: emptyList()
+            if (ipParts.size == 4) {
+                val subnet = "${ipParts[0]}.${ipParts[1]}.${ipParts[2]}"
+                diag.append("Scanning $subnet.1-254 on port 1400\n")
+
+                val subnetFound = ConcurrentHashMap<String, SonosSpeaker>()
+                val openPorts = ConcurrentHashMap<String, Boolean>()
+                val executor = Executors.newFixedThreadPool(30)
+
+                for (i in 1..254) {
+                    executor.submit {
+                        val ip = "$subnet.$i"
+                        try {
+                            val socket = Socket()
+                            if (wifiNetwork != null) {
+                                wifiNetwork.bindSocket(socket)
+                            }
+                            socket.connect(InetSocketAddress(ip, 1400), 400)
+                            socket.close()
+                            openPorts[ip] = true
+                            Log.d(TAG, "Port 1400 open: $ip")
+                            val speaker = fetchDeviceInfo("http://$ip:1400/xml/device_description.xml")
+                            if (speaker != null) {
+                                Log.d(TAG, "Subnet found: ${speaker.name} @ $ip")
+                                subnetFound[speaker.name] = speaker
+                            }
+                        } catch (_: Exception) {}
+                    }
+                }
+
+                executor.shutdown()
+                executor.awaitTermination(10, TimeUnit.SECONDS)
+                found.putAll(subnetFound)
+                diag.append("Subnet scan: ${openPorts.size} hosts with port 1400 open, ${subnetFound.size} Sonos speakers\n")
+            } else {
+                diag.append("Could not parse subnet from IP: ${localAddr.hostAddress}\n")
             }
         }
 
@@ -403,18 +393,23 @@ object SonosManager {
             if (devices.length == 0) return null
             val rootDevice = devices.item(0)
 
-            var name = ""
+            var friendlyName = ""
+            var roomName = ""
             var model = ""
             var uuid = ""
 
             for (i in 0 until rootDevice.childNodes.length) {
                 val child = rootDevice.childNodes.item(i)
                 when (child.nodeName) {
-                    "friendlyName" -> name = child.textContent ?: ""
+                    "friendlyName" -> friendlyName = child.textContent ?: ""
+                    "roomName" -> roomName = child.textContent ?: ""
                     "modelName" -> model = child.textContent ?: ""
                     "UDN" -> uuid = (child.textContent ?: "").removePrefix("uuid:")
                 }
             }
+            // Prefer roomName (user-set name like "Living Room") over
+            // friendlyName (which contains IP + model + RINCON UUID)
+            val name = roomName.ifEmpty { friendlyName }
 
             // Search ALL <service> elements across ALL nested devices for
             // AVTransport and RenderingControl. Sonos puts these in a
