@@ -1716,11 +1716,36 @@ function eqFindBand(px, py, w, h) {
 }
 
 let eqUpdateTimeout = null;
+let eqApplyTimeout = null;
 let eqEditBand = -1; // which band is being edited in popup
 
-// EQ changes are now applied LIVE to the audio stream — no need to restart the
-// track. The server-side processing thread picks up parameter changes on each
-// audio buffer (~10ms). Changes take effect within 2-5s (Sonos buffer drain).
+// For Sonos: EQ changes are live once the EQ stream is established, but the
+// first activation (switching from original file to EQ stream) requires a
+// re-send with a cache-busting URL so Sonos re-fetches. For local playback:
+// EQ changes are always live (~10ms latency), no re-send needed.
+
+/** Re-send current track to Sonos with cache-busting URL when EQ becomes active. */
+async function applyEqToSpeaker() {
+  if (!currentFile || !selectedSpeakers.length) return;
+  const sonos = sonosSpeakers();
+  if (!sonos.length) return;
+  try {
+    if (sonos.length > 1) {
+      await api('POST', '/api/play-multi', { speakers: sonos.map(s => s.name), file: currentFile });
+    } else {
+      await api('POST', '/api/play', { speaker: sonos[0].name, file: currentFile });
+    }
+  } catch (e) {
+    showToast('EQ apply failed: ' + e.message, 'error');
+  }
+}
+
+function scheduleEqApply() {
+  // Only re-send to Sonos speakers (local playback picks up EQ changes live)
+  if (!sonosSpeakers().length) return;
+  clearTimeout(eqApplyTimeout);
+  eqApplyTimeout = setTimeout(applyEqToSpeaker, 1500);
+}
 
 function sendBandUpdate(bandIndex) {
   clearTimeout(eqUpdateTimeout);
@@ -1735,6 +1760,7 @@ function sendBandUpdate(bandIndex) {
     }).then(() => refreshEqResponse())
       .catch(err => showToast('EQ update failed: ' + err.message, 'error'));
   }, 100);
+  scheduleEqApply();
 }
 
 function eqDragUpdate(bandIndex, freq, gain, q) {
@@ -1972,6 +1998,7 @@ $('btnEqBypass').addEventListener('click', async () => {
   updateEqBypassBtn();
   drawEq();
   await api('POST', '/api/eq/bypass', { bypass: eqBypass });
+  scheduleEqApply();
 });
 
 $('btnEqAdd').addEventListener('click', async () => {
@@ -1983,6 +2010,7 @@ $('btnEqAdd').addEventListener('click', async () => {
 $('btnEqReset').addEventListener('click', async () => {
   await api('POST', '/api/eq/reset');
   await loadEqState();
+  scheduleEqApply();
 });
 
 async function toggleEqBand(i) {
@@ -1990,11 +2018,13 @@ async function toggleEqBand(i) {
   renderEqBandList();
   await api('POST', '/api/eq/band', { action: 'update', index: i, ...eqBands[i] });
   await refreshEqResponse();
+  scheduleEqApply();
 }
 
 async function removeEqBand(i) {
   await api('POST', '/api/eq/band', { action: 'remove', index: i });
   await loadEqState();
+  scheduleEqApply();
 }
 
 // Add EQ toggle button to player controls

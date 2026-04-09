@@ -1,6 +1,6 @@
 {
-  "versionCode": 16,
-  "versionName": "2.0.0",
-  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v2.0.0/aux.apk",
-  "releaseNotes": "Renamed to Aux"
+  "versionCode": 17,
+  "versionName": "2.0.1",
+  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v2.0.1/aux.apk",
+  "releaseNotes": "Fix Sonos playback — serve original file when EQ is flat, decode path only when EQ active"
 }

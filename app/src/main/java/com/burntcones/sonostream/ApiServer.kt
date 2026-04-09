@@ -200,7 +200,10 @@ class ApiServer(
                 } else {
                     val localIp = getLocalIp()
                     val port = listeningPort
-                    val audioUri = "http://$localIp:$port/audio/${java.net.URLEncoder.encode(filePath, "UTF-8").replace("+", "%20")}"
+                    val encodedPath = java.net.URLEncoder.encode(filePath, "UTF-8").replace("+", "%20")
+                    val eqActive = !eq.bypass && eq.getBands().any { it.enabled && it.gainDb != 0f }
+                    val cacheBust = if (eqActive) "?eq=${eq.settingsHash()}" else ""
+                    val audioUri = "http://$localIp:$port/audio/$encodedPath$cacheBust"
                     val title = File(filePath).nameWithoutExtension
                     val ok = SonosManager.playUri(sp, audioUri, title)
                     jsonResponse(JSONObject().put("success", ok))
@@ -394,7 +397,10 @@ class ApiServer(
                 } else {
                     val localIp = getLocalIp()
                     val port = listeningPort
-                    val audioUri = "http://$localIp:$port/audio/${java.net.URLEncoder.encode(filePath, "UTF-8").replace("+", "%20")}"
+                    val encodedPath = java.net.URLEncoder.encode(filePath, "UTF-8").replace("+", "%20")
+                    val eqActive = !eq.bypass && eq.getBands().any { it.enabled && it.gainDb != 0f }
+                    val cacheBust = if (eqActive) "?eq=${eq.settingsHash()}" else ""
+                    val audioUri = "http://$localIp:$port/audio/$encodedPath$cacheBust"
                     val title = File(filePath).nameWithoutExtension
                     val results = JSONObject()
                     for (i in 0 until speakerNames.length()) {
@@ -462,11 +468,39 @@ class ApiServer(
         val relPath = URLDecoder.decode(uri.removePrefix("/audio/").split("?")[0], "UTF-8")
         val file = resolveAudioFile(relPath) ?: return newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "File not found")
 
-        // Always stream through EQ decode path so live EQ changes take effect
-        // mid-stream without restarting the track. At 0dB gain, filters are
-        // transparent (H(z)=1), so there's no quality loss when EQ is flat.
-        // The ?eq= query param (if present) is just for Sonos cache-busting.
-        return serveEqAudio(session, file)
+        // Use EQ decode path when any band has non-zero gain; otherwise serve
+        // the original file directly (more reliable for Sonos streaming).
+        val eqActive = !eq.bypass && eq.getBands().any { it.enabled && it.gainDb != 0f }
+
+        if (eqActive) {
+            return serveEqAudio(session, file)
+        }
+
+        // No EQ — serve original file directly
+        val mime = mimeForAudio(file)
+        val fileSize = file.length()
+        val rangeHeader = session.headers["range"]
+
+        if (rangeHeader != null && rangeHeader.startsWith("bytes=")) {
+            val rangeParts = rangeHeader.removePrefix("bytes=").split("-")
+            val start = rangeParts[0].toLongOrNull() ?: 0
+            val end = if (rangeParts.size > 1 && rangeParts[1].isNotEmpty()) rangeParts[1].toLong() else fileSize - 1
+            val length = end - start + 1
+
+            val fis = FileInputStream(file)
+            fis.skip(start)
+
+            val response = newFixedLengthResponse(Response.Status.PARTIAL_CONTENT, mime, fis, length)
+            response.addHeader("Content-Range", "bytes $start-$end/$fileSize")
+            response.addHeader("Accept-Ranges", "bytes")
+            response.addHeader("Content-Length", length.toString())
+            return response
+        }
+
+        val fis = FileInputStream(file)
+        val response = newFixedLengthResponse(Response.Status.OK, mime, fis, fileSize)
+        response.addHeader("Accept-Ranges", "bytes")
+        return response
     }
 
     /**
