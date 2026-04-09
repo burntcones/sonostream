@@ -267,7 +267,14 @@ class StreamerService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         // Handle media button intents
         MediaButtonReceiver.handleIntent(mediaSession, intent)
-        return START_STICKY
+        return START_NOT_STICKY
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        // App swiped away from recents — stop the service and notification
+        LocalPlayer.stop()
+        stopSelf()
+        super.onTaskRemoved(rootIntent)
     }
 
     override fun onDestroy() {
