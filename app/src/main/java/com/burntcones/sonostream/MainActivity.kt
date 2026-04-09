@@ -94,6 +94,14 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        // Restart the service if it was killed (e.g. after onTaskRemoved)
+        if (StreamerService.instance == null) {
+            startServer()
+        }
+    }
+
     private fun startServer() {
         val intent = Intent(this, StreamerService::class.java)
         if (Build.VERSION.SDK_INT >= 26) {

@@ -1,6 +1,6 @@
 {
-  "versionCode": 18,
-  "versionName": "2.0.2",
-  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v2.0.2/aux.apk",
-  "releaseNotes": "Service stops when app is closed — notification no longer persists"
+  "versionCode": 19,
+  "versionName": "2.0.3",
+  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v2.0.3/aux.apk",
+  "releaseNotes": "Fix blank screen on reopen — service restarts automatically"
 }
