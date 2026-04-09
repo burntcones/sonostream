@@ -83,7 +83,7 @@ export ANDROID_HOME="$HOME/Library/Android/sdk"
 - Repo: github.com/burntcones/sonostream (public)
 - `gh` CLI is authenticated as `burntcones`
 - OTA manifest: `update.json` in repo root (raw URL: `https://raw.githubusercontent.com/burntcones/sonostream/main/update.json`)
-- Current version: versionCode 16, versionName 2.0.0
+- Current version: versionCode 20, versionName 2.1.0
 
 ## OTA Update Workflow
 1. Bump `versionCode` and `versionName` in `app/build.gradle`
