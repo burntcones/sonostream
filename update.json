@@ -1,6 +1,6 @@
 {
-  "versionCode": 21,
-  "versionName": "2.2.0",
-  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v2.2.0/aux.apk",
-  "releaseNotes": "Track list now scrolls on all devices. EQ no longer stops playback on Sonos. Speaker discovery more reliable across tablets — no more needing to clear data."
+  "versionCode": 22,
+  "versionName": "2.3.0",
+  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v2.3.0/aux.apk",
+  "releaseNotes": "Track list scrolls in tablet mode. EQ no longer cuts playback — switched to chunked streaming with reliable duration probe."
 }

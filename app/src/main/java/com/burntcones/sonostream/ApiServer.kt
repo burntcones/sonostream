@@ -473,7 +473,7 @@ class ApiServer(
         val eqActive = !eq.bypass && eq.getBands().any { it.enabled && it.gainDb != 0f }
 
         if (eqActive) {
-            return serveEqAudio(session, file)
+            return serveEqAudio(file)
         }
 
         // No EQ — serve original file directly
@@ -504,58 +504,26 @@ class ApiServer(
     }
 
     /**
-     * Serve EQ-processed audio as a WAV stream. Decodes → EQ → streams on the fly.
-     * Supports Range requests for seeking.
+     * Serve EQ-processed audio as a WAV stream. Decodes → EQ → streams on the fly
+     * using HTTP/1.1 chunked transfer encoding — no Content-Length, no length
+     * mismatch possible. Range requests are intentionally ignored (we always
+     * serve the full file from the start); Sonos seeks via UPnP SOAP for music
+     * playback rather than HTTP Range.
      */
-    private fun serveEqAudio(session: IHTTPSession, file: File): Response {
-        val info = AudioProcessor.probe(file.absolutePath)
-            ?: return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, MIME_PLAINTEXT, "Cannot read audio")
-
-        val wavSize = AudioProcessor.estimateWavSize(info)
-        val rangeHeader = session.headers["range"]
-
+    private fun serveEqAudio(file: File): Response {
         // Set up a pipe: processing thread writes, NanoHTTPD reads
         val pipeIn = PipedInputStream(65536)
         val pipeOut = PipedOutputStream(pipeIn)
 
-        if (rangeHeader != null && rangeHeader.startsWith("bytes=")) {
-            val rangeParts = rangeHeader.removePrefix("bytes=").split("-")
-            val start = rangeParts[0].toLongOrNull() ?: 0
-            val end = if (rangeParts.size > 1 && rangeParts[1].isNotEmpty()) rangeParts[1].toLong() else wavSize - 1
-            val length = end - start + 1
-
-            // Calculate seek position: bytes after 44-byte WAV header → sample time
-            val dataOffset = if (start > 44) start - 44 else 0L
-            val bytesPerSample = info.channels * 2
-            val sampleOffset = dataOffset / bytesPerSample
-            val seekUs = sampleOffset * 1_000_000L / info.sampleRate
-
-            Thread {
-                try {
-                    if (start < 44) {
-                        // Range starts within WAV header — unusual but handle it
-                        AudioProcessor.streamProcess(file.absolutePath, eq, pipeOut)
-                    } else {
-                        AudioProcessor.streamProcess(
-                            file.absolutePath, eq, pipeOut,
-                            seekToUs = seekUs,
-                            skipBytes = dataOffset - (sampleOffset * bytesPerSample) // align to sample boundary
-                        )
-                    }
-                } catch (e: Exception) {
-                    android.util.Log.e("ApiServer", "EQ stream range error", e)
-                }
-                try { pipeOut.close() } catch (_: Exception) {}
-            }.start()
-
-            val response = newFixedLengthResponse(Response.Status.PARTIAL_CONTENT, "audio/wav", pipeIn, length)
-            response.addHeader("Content-Range", "bytes $start-$end/$wavSize")
-            response.addHeader("Accept-Ranges", "bytes")
-            response.addHeader("Content-Length", length.toString())
-            return response
-        }
-
-        // Full file request — stream from beginning
+        // Full file request — stream from beginning.
+        // Uses chunked transfer encoding (newChunkedResponse) instead of a
+        // fixed Content-Length so the HTTP layer is immune to Content-Length /
+        // actual-bytes mismatches. The v2.2.0 attempt to match a fixed size
+        // exactly (by truncating the decoder) killed playback when the duration
+        // estimate was wrong; chunked sidesteps the whole problem — Sonos
+        // reads until the stream ends, which now happens at natural decoder
+        // EOS. The WAV header's dataSize is still an estimate used only for
+        // the track-duration display inside Sonos.
         Thread {
             try {
                 AudioProcessor.streamProcess(file.absolutePath, eq, pipeOut)
@@ -565,8 +533,10 @@ class ApiServer(
             try { pipeOut.close() } catch (_: Exception) {}
         }.start()
 
-        val response = newFixedLengthResponse(Response.Status.OK, "audio/wav", pipeIn, wavSize)
-        response.addHeader("Accept-Ranges", "bytes")
+        val response = newChunkedResponse(Response.Status.OK, "audio/wav", pipeIn)
+        // Do not advertise Accept-Ranges — chunked responses don't pair cleanly
+        // with Range requests, and Sonos seeks via UPnP SOAP (not HTTP Range)
+        // anyway for music playback.
         return response
     }
 

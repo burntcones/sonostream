@@ -57,6 +57,10 @@ html, body {
     min-width: 0;
     padding-bottom: 24px !important;
     border-right: 1px solid var(--border);
+    /* Explicit bounded height: in flex-wrap row mode, cross-axis stretching
+       otherwise makes the file-area grow to its content size and overflow:auto
+       never creates a scroll container. Matches player-bar's height above. */
+    height: calc(100vh - 120px);
   }
   .player-bar {
     position: static !important;

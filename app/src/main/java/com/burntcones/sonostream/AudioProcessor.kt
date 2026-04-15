@@ -3,6 +3,7 @@ package com.burntcones.sonostream
 import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
+import android.media.MediaMetadataRetriever
 import android.util.Log
 import java.io.*
 import java.nio.ByteBuffer
@@ -45,6 +46,31 @@ object AudioProcessor {
         val mime: String
     )
 
+    /**
+     * Probe an audio file's duration robustly. Tries MediaMetadataRetriever
+     * first (authoritative for most formats), falls back to MediaFormat, and
+     * finally to 0 if neither has the metadata.
+     *
+     * Returns microseconds.
+     */
+    private fun probeDurationUs(inputPath: String, format: MediaFormat): Long {
+        // Primary: MediaMetadataRetriever. Returns milliseconds as a String.
+        val mmr = MediaMetadataRetriever()
+        try {
+            mmr.setDataSource(inputPath)
+            val ms = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
+            if (ms != null && ms > 0) return ms * 1000L
+        } catch (e: Exception) {
+            Log.w(TAG, "MediaMetadataRetriever failed for $inputPath: ${e.message}")
+        } finally {
+            try { mmr.release() } catch (_: Exception) {}
+        }
+        // Fallback: MediaFormat (may be 0 on some devices)
+        return if (format.containsKey(MediaFormat.KEY_DURATION)) {
+            format.getLong(MediaFormat.KEY_DURATION)
+        } else 0L
+    }
+
     /** Probe an audio file for its format info without decoding. */
     fun probe(inputPath: String): AudioInfo? {
         val extractor = MediaExtractor()
@@ -57,8 +83,7 @@ object AudioProcessor {
                     return AudioInfo(
                         sampleRate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE),
                         channels = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT),
-                        durationUs = if (format.containsKey(MediaFormat.KEY_DURATION))
-                            format.getLong(MediaFormat.KEY_DURATION) else 0L,
+                        durationUs = probeDurationUs(inputPath, format),
                         mime = mime
                     )
                 }
@@ -129,19 +154,21 @@ object AudioProcessor {
 
             val sampleRate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
             val channels = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
-            val durationUs = if (format.containsKey(MediaFormat.KEY_DURATION))
-                format.getLong(MediaFormat.KEY_DURATION) else 0L
             val mime = format.getString(MediaFormat.KEY_MIME)!!
 
+            // Probe duration with MediaMetadataRetriever — more reliable than
+            // MediaFormat.KEY_DURATION, which some devices return as 0 even for
+            // files that clearly have duration metadata. That caused v2.2.0's
+            // truncation to cut playback to zero samples (Bug 3 regression).
+            val durationUs = probeDurationUs(inputPath, format)
             log("Format: $mime ${sampleRate}Hz ${channels}ch ${durationUs/1_000_000}s")
 
-            // ── Compute EXPECTED byte count and make the WAV header, estimate,
-            // and actual output agree exactly. This is critical: Sonos receives
-            // a fixed-Content-Length HTTP response, and any mismatch between the
-            // advertised size and the bytes we actually write causes playback to
-            // stop on some devices (see CLAUDE.md Bug 3). ──
+            // Informational WAV header dataSize for Sonos duration display.
+            // NOT enforced by the write loop — we stream whatever MediaCodec
+            // produces. With chunked transfer encoding (see ApiServer) there is
+            // no Content-Length mismatch possible, so drift here is cosmetic.
             val totalSamples = durationUs * sampleRate / 1_000_000L
-            val expectedDataBytes = totalSamples * channels * 2L
+            val estimatedDataBytes = totalSamples * channels * 2L
 
             // Local EQ with correct sample rate — syncs from liveEq on version changes
             val streamEq = ParametricEQ(sampleRate)
@@ -160,9 +187,8 @@ object AudioProcessor {
             log("Codec started: $mime")
 
             // Write WAV header (only for full-file requests, not range sub-requests).
-            // dataSize here must match expectedDataBytes used by the write loop.
             if (skipBytes == 0L) {
-                writeWavHeaderToStream(output, sampleRate, channels, expectedDataBytes)
+                writeWavHeaderToStream(output, sampleRate, channels, estimatedDataBytes)
             }
 
             var bytesWritten = 0L        // data bytes written so far (excludes header)
@@ -236,31 +262,23 @@ object AudioProcessor {
                             pcmBuf.putShort((floats[i].coerceIn(-1f, 1f) * 32767f).toInt().toShort())
                         }
 
-                        // Handle skip (for Range requests) and write to output,
-                        // respecting expectedDataBytes so we never overshoot.
-                        var writeOffset = 0
-                        var writeLen = pcmBytes.size
+                        // Handle skip (for Range requests). NOTE: we write every
+                        // decoded byte; no size-based truncation. With chunked
+                        // HTTP encoding the server doesn't care about the length,
+                        // and not truncating avoids the v2.2.0 regression that
+                        // cut playback off at zero samples when durationUs was 0.
                         if (bytesToSkip > 0) {
-                            if (bytesToSkip >= writeLen) {
-                                bytesToSkip -= writeLen
-                                writeLen = 0
+                            if (bytesToSkip >= pcmBytes.size) {
+                                bytesToSkip -= pcmBytes.size
                             } else {
-                                writeOffset = bytesToSkip.toInt()
-                                writeLen -= writeOffset
+                                val offset = bytesToSkip.toInt()
+                                output.write(pcmBytes, offset, pcmBytes.size - offset)
+                                bytesWritten += pcmBytes.size - offset
                                 bytesToSkip = 0
                             }
-                        }
-                        if (writeLen > 0) {
-                            val remaining = expectedDataBytes - bytesWritten
-                            if (remaining <= 0) {
-                                // Already delivered full promise — stop early
-                                outputDone = true
-                            } else {
-                                val toWrite = minOf(writeLen.toLong(), remaining).toInt()
-                                output.write(pcmBytes, writeOffset, toWrite)
-                                bytesWritten += toWrite
-                                if (bytesWritten >= expectedDataBytes) outputDone = true
-                            }
+                        } else {
+                            output.write(pcmBytes)
+                            bytesWritten += pcmBytes.size
                         }
                     }
 
@@ -268,8 +286,7 @@ object AudioProcessor {
                 }
 
                 // Stall guard — if nothing happened this iteration, count it and
-                // abort if we exceed the limit (decoder got stuck). Padding below
-                // still runs, so the client still receives a full-length response.
+                // abort if we exceed the limit (decoder got stuck).
                 if (!madeProgress) {
                     stallCount++
                     if (stallCount >= stallLimit) {
@@ -283,25 +300,8 @@ object AudioProcessor {
 
             try { codec.stop() } catch (_: Exception) {}
             try { codec.release() } catch (_: Exception) {}
-
-            // ── Pad with silence to reach expectedDataBytes exactly. This is
-            // the fix for "EQ stops playback entirely" — Sonos requires the
-            // Content-Length promise to be honored or it aborts the stream. ──
-            if (skipBytes == 0L && bytesWritten < expectedDataBytes) {
-                val padBytes = expectedDataBytes - bytesWritten
-                val silenceBuf = ByteArray(minOf(padBytes, 8192L).toInt())
-                var remaining = padBytes
-                while (remaining > 0) {
-                    val chunk = minOf(remaining, silenceBuf.size.toLong()).toInt()
-                    output.write(silenceBuf, 0, chunk)
-                    remaining -= chunk
-                    bytesWritten += chunk
-                }
-                log("Padded ${padBytes}b silence to match WAV header")
-            }
-
             output.flush()
-            log("Stream DONE: $fileName — $bytesWritten / $expectedDataBytes data bytes")
+            log("Stream DONE: $fileName — ${bytesWritten}b written (est ${estimatedDataBytes}b)")
         } catch (e: IOException) {
             // Client disconnected (Sonos stopped reading) — normal
             log("Stream ended (client disconnected): ${e.message}")
