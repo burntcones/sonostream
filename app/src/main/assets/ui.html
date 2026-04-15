@@ -288,6 +288,7 @@ html, body {
 /* ── File List ── */
 .file-area {
   flex: 1;
+  min-height: 0; /* Required: flex items default to min-height:auto which prevents overflow:auto from scrolling when content exceeds allocated space */
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   padding-bottom: calc(200px + var(--safe-bottom));

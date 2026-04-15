@@ -8,7 +8,16 @@ import android.util.Log
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
-import java.net.*
+import java.net.DatagramPacket
+import java.net.HttpURLConnection
+import java.net.Inet4Address
+import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.net.MulticastSocket
+import java.net.NetworkInterface
+import java.net.Socket
+import java.net.SocketTimeoutException
+import java.net.URL
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.ConcurrentHashMap
@@ -53,8 +62,33 @@ object SonosManager {
     var speakers: MutableMap<String, SonosSpeaker> = mutableMapOf()
         private set
 
-    /** WiFi Network object, used to route SOAP calls over WiFi when cellular is default */
-    private var wifiNet: android.net.Network? = null
+    /**
+     * WiFi Network object, used to route outbound Sonos traffic over WiFi when
+     * cellular is default. Used per-socket (not via bindProcessToNetwork) so a
+     * zombie process binding from a previous app lifecycle can't strand us on a
+     * dead network — see CLAUDE.md Bug 2.
+     */
+    @Volatile private var wifiNet: android.net.Network? = null
+
+    /**
+     * Open an HttpURLConnection that routes over the WiFi network when available.
+     * Falls back to the default network if wifiNet is null.
+     */
+    private fun openWifiConnection(url: URL): HttpURLConnection {
+        val net = wifiNet
+        return (if (net != null) net.openConnection(url) else url.openConnection()) as HttpURLConnection
+    }
+
+    /**
+     * Reset SonosManager state. Called by StreamerService on service create
+     * so a new app lifecycle never inherits stale speakers or a stale network
+     * reference from a process that the OS kept alive in the background.
+     */
+    fun clearState() {
+        speakers = mutableMapOf()
+        wifiNet = null
+        lastDiagnostics = "State cleared"
+    }
 
     private const val TAG = "SonosManager"
 
@@ -180,17 +214,15 @@ object SonosManager {
 
         val localAddr = wifiInfo.address
         val wifiNetwork = wifiInfo.network
-        wifiNet = wifiNetwork  // Store for SOAP calls
+        wifiNet = wifiNetwork  // Store for per-socket binding in SOAP / fetchDeviceInfo
         diag.append("Using WiFi IP: ${localAddr.hostAddress}\n")
 
-        // If we have a Network object, bind the process to it so ALL sockets
-        // (discovery + subsequent SOAP calls) go over WiFi
-        val cm = context?.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-        if (wifiNetwork != null && cm != null) {
-            cm.bindProcessToNetwork(wifiNetwork)
-            diag.append("Bound process to WiFi network\n")
-            Log.d(TAG, "Bound process to WiFi network")
-        }
+        // NOTE: We intentionally do NOT call cm.bindProcessToNetwork() here.
+        // A process-level binding survives beyond the app's visible lifecycle
+        // (when the OS keeps the process alive after onTaskRemoved) and can
+        // strand a reopened app on a dead Network object — the "needs device
+        // restart or clear data" symptom from CLAUDE.md Bug 2. Instead we bind
+        // individual sockets via wifiNetwork.bindSocket / openWifiConnection.
 
         // ── SSDP Discovery ──
         val msg = "M-SEARCH * HTTP/1.1\r\n" +
@@ -201,21 +233,40 @@ object SonosManager {
             "\r\n"
 
         try {
-            val sock = DatagramSocket(null).apply {
+            // Use MulticastSocket with an explicit network interface so
+            // outbound M-SEARCH packets actually leave via the WiFi interface.
+            // A plain DatagramSocket bound to localAddr is unreliable on Android
+            // for multicast sending on multi-homed hosts.
+            val iface: NetworkInterface? = try {
+                NetworkInterface.getByInetAddress(localAddr)
+            } catch (_: Exception) { null }
+
+            val sock = MulticastSocket(null).apply {
                 reuseAddress = true
-                soTimeout = timeoutMs
                 bind(InetSocketAddress(localAddr, 0))
+                if (iface != null) {
+                    try { networkInterface = iface } catch (_: Exception) {}
+                }
+                timeToLive = 4
+                soTimeout = timeoutMs
+            }
+            // As a belt-and-suspenders measure, also bind the underlying socket
+            // to the WiFi network when the Network object is available.
+            if (wifiNetwork != null) {
+                try { wifiNetwork.bindSocket(sock) } catch (_: Exception) {}
             }
 
-            diag.append("SSDP socket bound to ${sock.localAddress.hostAddress}:${sock.localPort}\n")
-            Log.d(TAG, "SSDP bound to ${sock.localAddress.hostAddress}:${sock.localPort}")
+            diag.append("SSDP MulticastSocket bound to ${sock.localAddress?.hostAddress}:${sock.localPort} iface=${iface?.name}\n")
+            Log.d(TAG, "SSDP bound to ${sock.localAddress?.hostAddress}:${sock.localPort} iface=${iface?.name}")
 
             val group = InetAddress.getByName(SSDP_ADDR)
             val sendData = msg.toByteArray()
             val packet = DatagramPacket(sendData, sendData.size, group, SSDP_PORT)
 
             for (i in 1..3) {
-                sock.send(packet)
+                try { sock.send(packet) } catch (e: Exception) {
+                    diag.append("SSDP send #$i failed: ${e.message}\n")
+                }
                 if (i < 3) Thread.sleep(200)
             }
             diag.append("Sent 3 M-SEARCH packets\n")
@@ -393,7 +444,7 @@ object SonosManager {
     private fun fetchDeviceInfo(location: String): SonosSpeaker? {
         return try {
             val url = URL(location)
-            val conn = url.openConnection() as HttpURLConnection
+            val conn = openWifiConnection(url)
             conn.connectTimeout = 3000
             conn.readTimeout = 3000
             val xml = conn.inputStream.bufferedReader().readText()
@@ -480,7 +531,7 @@ object SonosManager {
 </s:Envelope>"""
 
             val url = URL("http://${speaker.ip}:${speaker.port}$serviceUrl")
-            val conn = url.openConnection() as HttpURLConnection
+            val conn = openWifiConnection(url)
             conn.requestMethod = "POST"
             conn.connectTimeout = timeoutMs
             conn.readTimeout = timeoutMs

@@ -4,6 +4,7 @@ import android.app.*
 import android.content.Context
 import android.content.Intent
 import android.graphics.BitmapFactory
+import android.net.ConnectivityManager
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
@@ -35,6 +36,21 @@ class StreamerService : Service() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+
+        // Wipe any zombie process-wide network binding from an earlier lifecycle.
+        // When onTaskRemoved stopped the service but Android kept the process
+        // alive, a previous call to bindProcessToNetwork could still be active
+        // on a dead Network object, silently breaking all outbound traffic.
+        // Also reset SonosManager so a new lifecycle never inherits stale
+        // speakers or a stale wifiNet reference — see CLAUDE.md Bug 2.
+        try {
+            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            cm.bindProcessToNetwork(null)
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not clear process network binding: ${e.message}")
+        }
+        SonosManager.clearState()
+
         createNotificationChannel()
         setupMediaSession()
         startForeground(NOTIFICATION_ID, buildNotification())
