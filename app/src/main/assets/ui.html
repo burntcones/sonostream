@@ -46,7 +46,7 @@ html, body {
 /* ── Tablet: two-column layout ── */
 @media (min-width: 768px) {
   .app {
-    max-width: 1100px;
+    max-width: none;
     flex-direction: row;
     flex-wrap: wrap;
   }
@@ -55,12 +55,39 @@ html, body {
   .file-area {
     flex: 1;
     min-width: 0;
-    padding-bottom: 24px !important;
     border-right: 1px solid var(--border);
     /* Explicit bounded height: in flex-wrap row mode, cross-axis stretching
        otherwise makes the file-area grow to its content size and overflow:auto
        never creates a scroll container. Matches player-bar's height above. */
     height: calc(100vh - 120px);
+  }
+  .file-list-scroll {
+    padding-bottom: 24px !important;
+  }
+  .resizer {
+    display: block;
+    flex-shrink: 0;
+    width: 6px;
+    height: calc(100vh - 120px);
+    cursor: col-resize;
+    background: transparent;
+    position: relative;
+    touch-action: none;
+  }
+  .resizer::before {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: 2px;
+    height: 32px;
+    background: var(--border);
+    border-radius: 1px;
+    transition: background 0.15s;
+  }
+  .resizer:hover::before, .resizer.dragging::before {
+    background: var(--accent);
   }
   .player-bar {
     position: static !important;
@@ -289,10 +316,32 @@ html, body {
   font-size: 14px;
 }
 
-/* ── File List ── */
+/* Resizer handle between file-area and player-bar (tablet only) */
+.resizer { display: none; }
+
+/* ── File List ──
+   .file-area is a flex-column container that owns a non-scrolling toolbar
+   (.file-toolbar with search + sort) at the top, and a scrolling list area
+   (.file-list-scroll) below it. Keeping the toolbar OUTSIDE the scroll
+   container is what prevents previously-scrolled file items from showing
+   above the sticky folder header — no sticky positioning fragility to get
+   wrong. */
 .file-area {
   flex: 1;
-  min-height: 0; /* Required: flex items default to min-height:auto which prevents overflow:auto from scrolling when content exceeds allocated space */
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.file-toolbar {
+  flex-shrink: 0;
+  background: var(--bg);
+}
+
+.file-list-scroll {
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   padding-bottom: calc(200px + var(--safe-bottom));
@@ -300,10 +349,7 @@ html, body {
 
 .search-bar {
   padding: 0 20px 10px;
-  position: sticky;
-  top: 0;
   background: var(--bg);
-  z-index: 10;
 }
 
 .search-input {
@@ -373,7 +419,7 @@ html, body {
   text-transform: uppercase;
   letter-spacing: 0.8px;
   position: sticky;
-  top: 46px;
+  top: 0;
   background: var(--bg);
   z-index: 5;
   cursor: pointer;
@@ -731,18 +777,25 @@ html, body {
 
   <!-- File List -->
   <div class="file-area" id="fileArea">
-    <div class="search-bar" style="position:relative">
-      <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
-      <input class="search-input" id="searchInput" type="text" placeholder="Search files…">
+    <div class="file-toolbar">
+      <div class="search-bar" style="position:relative">
+        <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
+        <input class="search-input" id="searchInput" type="text" placeholder="Search files…">
+      </div>
+      <div class="sort-bar">
+        <button class="sort-btn active" data-sort="name">Name</button>
+        <button class="sort-btn" data-sort="size">Size</button>
+        <button class="sort-btn" data-sort="folder">Folder</button>
+        <span class="file-count" id="fileCount"></span>
+      </div>
     </div>
-    <div class="sort-bar">
-      <button class="sort-btn active" data-sort="name">Name</button>
-      <button class="sort-btn" data-sort="size">Size</button>
-      <button class="sort-btn" data-sort="folder">Folder</button>
-      <span class="file-count" id="fileCount"></span>
+    <div class="file-list-scroll" id="fileListScroll">
+      <div id="fileList"></div>
     </div>
-    <div id="fileList"></div>
   </div>
+
+  <!-- Resizer handle (tablet only) -->
+  <div class="resizer" id="resizer"></div>
 
   <!-- Player Bar -->
   <div class="player-bar" id="playerBar">
@@ -2130,6 +2183,62 @@ window._updateProgress = function(pct) {
   $('updateProgressFill').style.width = pct + '%';
   if (pct >= 100) $('updateAction').textContent = ' — Installing…';
 };
+
+// ─── Player Bar Resizer (tablet only) ──────────────────────────────────────
+(function initResizer() {
+  const resizer = $('resizer');
+  const playerBar = $('playerBar');
+  if (!resizer || !playerBar) return;
+
+  const MIN_WIDTH = 280;
+  const MAX_WIDTH = 720;
+  const STORAGE_KEY = 'playerBarWidth';
+
+  // Restore saved width (only applies in tablet mode via inline style override)
+  const saved = parseInt(localStorage.getItem(STORAGE_KEY) || '', 10);
+  if (saved >= MIN_WIDTH && saved <= MAX_WIDTH) {
+    playerBar.style.width = saved + 'px';
+  }
+
+  let dragging = false;
+  let startX = 0;
+  let startWidth = 340;
+
+  resizer.addEventListener('pointerdown', e => {
+    // Only engage in tablet layout
+    if (window.innerWidth < 768) return;
+    dragging = true;
+    startX = e.clientX;
+    startWidth = playerBar.offsetWidth;
+    resizer.classList.add('dragging');
+    resizer.setPointerCapture(e.pointerId);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    e.preventDefault();
+  });
+
+  resizer.addEventListener('pointermove', e => {
+    if (!dragging) return;
+    const dx = startX - e.clientX; // drag LEFT = widen player
+    let newWidth = startWidth + dx;
+    newWidth = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, newWidth));
+    playerBar.style.width = newWidth + 'px';
+    // Nudge the EQ canvas so it redraws at the new width
+    if (typeof drawEq === 'function') drawEq();
+  });
+
+  const endDrag = e => {
+    if (!dragging) return;
+    dragging = false;
+    resizer.classList.remove('dragging');
+    try { resizer.releasePointerCapture(e.pointerId); } catch (_) {}
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    localStorage.setItem(STORAGE_KEY, playerBar.offsetWidth.toString());
+  };
+  resizer.addEventListener('pointerup', endDrag);
+  resizer.addEventListener('pointercancel', endDrag);
+})();
 
 // ─── Init ───────────────────────────────────────────────────────────────────
 (async function init() {

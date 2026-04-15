@@ -1,6 +1,6 @@
 {
-  "versionCode": 22,
-  "versionName": "2.3.0",
-  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v2.3.0/aux.apk",
-  "releaseNotes": "Track list scrolls in tablet mode. EQ no longer cuts playback — switched to chunked streaming with reliable duration probe."
+  "versionCode": 23,
+  "versionName": "2.3.1",
+  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v2.3.1/aux.apk",
+  "releaseNotes": "Fix scroll ghosting (search and sort now sit above the scroll area). Resizable player panel — drag the thin handle between the file list and the player bar."
 }
