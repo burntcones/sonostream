@@ -98,7 +98,11 @@ object SonosManager {
 
     /** Ring buffer of recent SOAP call logs (visible via /api/debug) */
     private val soapLogs = java.util.concurrent.ConcurrentLinkedDeque<String>()
-    private const val MAX_SOAP_LOGS = 50
+    private const val MAX_SOAP_LOGS = 200
+
+    /** Last observed CurrentTransportState per speaker. Used to log only
+     *  state CHANGES from the 2-second polling loop, not every poll. */
+    private val lastTransportState = ConcurrentHashMap<String, String>()
 
     private fun logSoap(msg: String) {
         val ts = java.text.SimpleDateFormat("HH:mm:ss.SSS", java.util.Locale.US).format(java.util.Date())
@@ -559,9 +563,13 @@ object SonosManager {
         val metadata = "&lt;DIDL-Lite xmlns:dc=&quot;http://purl.org/dc/elements/1.1/&quot; xmlns:upnp=&quot;urn:schemas-upnp-org:metadata-1-0/upnp/&quot; xmlns=&quot;urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/&quot;&gt;&lt;item id=&quot;1&quot; parentID=&quot;0&quot; restricted=&quot;1&quot;&gt;&lt;dc:title&gt;$escTitle&lt;/dc:title&gt;&lt;upnp:class&gt;object.item.audioItem.musicTrack&lt;/upnp:class&gt;&lt;res&gt;$escUri&lt;/res&gt;&lt;/item&gt;&lt;/DIDL-Lite&gt;"
 
         val args = "<InstanceID>0</InstanceID><CurrentURI>$escUri</CurrentURI><CurrentURIMetaData>$metadata</CurrentURIMetaData>"
-        val (status, _) = soap(speaker, speaker.controlUrl, AVT, "SetAVTransportURI", args)
+        logSoap("SetAVTransportURI: ${speaker.name} title=\"$title\" uri=${uri.take(80)}")
+        val (status, data) = soap(speaker, speaker.controlUrl, AVT, "SetAVTransportURI", args)
+        logSoap("SetAVTransportURI result: status=$status" + if (status != 200) " body=${data.take(200)}" else "")
         if (status == 200) {
-            soap(speaker, speaker.controlUrl, AVT, "Play", "<InstanceID>0</InstanceID><Speed>1</Speed>")
+            logSoap("Play: ${speaker.name}")
+            val (playStatus, playData) = soap(speaker, speaker.controlUrl, AVT, "Play", "<InstanceID>0</InstanceID><Speed>1</Speed>")
+            logSoap("Play result: status=$playStatus" + if (playStatus != 200) " body=${playData.take(200)}" else "")
         }
         return status == 200
     }
@@ -569,7 +577,9 @@ object SonosManager {
     fun transportAction(speaker: SonosSpeaker, action: String): Boolean {
         var args = "<InstanceID>0</InstanceID>"
         if (action == "Play") args += "<Speed>1</Speed>"
-        val (status, _) = soap(speaker, speaker.controlUrl, AVT, action, args)
+        logSoap("$action: ${speaker.name}")
+        val (status, data) = soap(speaker, speaker.controlUrl, AVT, action, args)
+        logSoap("$action result: status=$status" + if (status != 200) " body=${data.take(200)}" else "")
         return status == 200
     }
 
@@ -601,7 +611,19 @@ object SonosManager {
         val (status, data) = soap(speaker, speaker.controlUrl, AVT, "GetTransportInfo", "<InstanceID>0</InstanceID>", timeoutMs = 2000)
         if (status == 200) {
             val m = Pattern.compile("<CurrentTransportState>(.*?)</CurrentTransportState>").matcher(data)
-            if (m.find()) return m.group(1)!!
+            if (m.find()) {
+                val state = m.group(1)!!
+                // Log only STATE CHANGES (the UI polls this every 2s; logging
+                // every hit would drown out useful entries in the ring buffer).
+                val prev = lastTransportState[speaker.name]
+                if (prev != state) {
+                    logSoap("TransportState: ${speaker.name} ${prev ?: "?"} -> $state")
+                    lastTransportState[speaker.name] = state
+                }
+                return state
+            }
+        } else {
+            logSoap("GetTransportInfo FAILED: ${speaker.name} status=$status body=${data.take(200)}")
         }
         return "UNKNOWN"
     }
@@ -655,7 +677,9 @@ object SonosManager {
 
     fun seek(speaker: SonosSpeaker, position: String): Boolean {
         val args = "<InstanceID>0</InstanceID><Unit>REL_TIME</Unit><Target>$position</Target>"
-        val (status, _) = soap(speaker, speaker.controlUrl, AVT, "Seek", args)
+        logSoap("Seek: ${speaker.name} to $position")
+        val (status, data) = soap(speaker, speaker.controlUrl, AVT, "Seek", args)
+        logSoap("Seek result: status=$status" + if (status != 200) " body=${data.take(200)}" else "")
         return status == 200
     }
 

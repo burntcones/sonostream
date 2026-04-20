@@ -1,6 +1,6 @@
 {
-  "versionCode": 23,
-  "versionName": "2.3.1",
-  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v2.3.1/aux.apk",
-  "releaseNotes": "Fix scroll ghosting (search and sort now sit above the scroll area). Resizable player panel — drag the thin handle between the file list and the player bar."
+  "versionCode": 24,
+  "versionName": "2.3.2",
+  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v2.3.2/aux.apk",
+  "releaseNotes": "Diagnostic build: better logs on the /audio/ path so we can see what's happening when playback stops. No feature changes."
 }

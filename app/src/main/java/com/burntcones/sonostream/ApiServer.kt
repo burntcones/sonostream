@@ -471,6 +471,10 @@ class ApiServer(
         // Use EQ decode path when any band has non-zero gain; otherwise serve
         // the original file directly (more reliable for Sonos streaming).
         val eqActive = !eq.bypass && eq.getBands().any { it.enabled && it.gainDb != 0f }
+        val rangeHeader = session.headers["range"]
+        val clientIp = session.headers["http-client-ip"] ?: session.headers["remote-addr"] ?: "?"
+
+        AudioProcessor.log("/audio GET: ${file.name} (${file.length()}b) eqActive=$eqActive range=${rangeHeader ?: "-"} client=$clientIp")
 
         if (eqActive) {
             return serveEqAudio(file)
@@ -479,7 +483,7 @@ class ApiServer(
         // No EQ — serve original file directly
         val mime = mimeForAudio(file)
         val fileSize = file.length()
-        val rangeHeader = session.headers["range"]
+        val startTimeMs = System.currentTimeMillis()
 
         if (rangeHeader != null && rangeHeader.startsWith("bytes=")) {
             val rangeParts = rangeHeader.removePrefix("bytes=").split("-")
@@ -489,8 +493,9 @@ class ApiServer(
 
             val fis = FileInputStream(file)
             fis.skip(start)
+            val wrapped = CountingInputStream(fis, "${file.name}[$start-$end/$fileSize]", length, startTimeMs)
 
-            val response = newFixedLengthResponse(Response.Status.PARTIAL_CONTENT, mime, fis, length)
+            val response = newFixedLengthResponse(Response.Status.PARTIAL_CONTENT, mime, wrapped, length)
             response.addHeader("Content-Range", "bytes $start-$end/$fileSize")
             response.addHeader("Accept-Ranges", "bytes")
             response.addHeader("Content-Length", length.toString())
@@ -498,9 +503,71 @@ class ApiServer(
         }
 
         val fis = FileInputStream(file)
-        val response = newFixedLengthResponse(Response.Status.OK, mime, fis, fileSize)
+        val wrapped = CountingInputStream(fis, file.name, fileSize, startTimeMs)
+        val response = newFixedLengthResponse(Response.Status.OK, mime, wrapped, fileSize)
         response.addHeader("Accept-Ranges", "bytes")
         return response
+    }
+
+    /**
+     * InputStream wrapper that counts bytes served and logs when the stream
+     * closes — either via normal EOF (Sonos read the full length) or because
+     * NanoHTTPD gave up (Sonos disconnected mid-stream, e.g. random-playback-stop).
+     * Comparing bytesRead vs expected tells us which one happened.
+     */
+    private class CountingInputStream(
+        private val delegate: InputStream,
+        private val label: String,
+        private val expectedBytes: Long,
+        private val startTimeMs: Long
+    ) : InputStream() {
+        private var bytesRead = 0L
+        private var closed = false
+        private var readFailed = false
+
+        override fun read(): Int {
+            return try {
+                val b = delegate.read()
+                if (b >= 0) bytesRead++
+                b
+            } catch (e: Exception) {
+                if (!readFailed) {
+                    readFailed = true
+                    AudioProcessor.log("/audio READ FAIL: $label after ${bytesRead}b — ${e.message}")
+                }
+                throw e
+            }
+        }
+
+        override fun read(b: ByteArray, off: Int, len: Int): Int {
+            return try {
+                val n = delegate.read(b, off, len)
+                if (n > 0) bytesRead += n
+                n
+            } catch (e: Exception) {
+                if (!readFailed) {
+                    readFailed = true
+                    AudioProcessor.log("/audio READ FAIL: $label after ${bytesRead}b — ${e.message}")
+                }
+                throw e
+            }
+        }
+
+        override fun available(): Int = delegate.available()
+
+        override fun close() {
+            if (closed) return
+            closed = true
+            val elapsedMs = System.currentTimeMillis() - startTimeMs
+            val pct = if (expectedBytes > 0) (bytesRead * 100 / expectedBytes) else 0
+            val status = when {
+                readFailed -> "READ_FAIL"
+                bytesRead >= expectedBytes -> "COMPLETE"
+                else -> "PREMATURE_CLOSE"
+            }
+            AudioProcessor.log("/audio END ($status): $label — ${bytesRead}/${expectedBytes}b ($pct%) in ${elapsedMs}ms")
+            try { delegate.close() } catch (_: Exception) {}
+        }
     }
 
     /**

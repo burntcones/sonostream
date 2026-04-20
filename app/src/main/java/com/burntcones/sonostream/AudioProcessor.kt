@@ -16,14 +16,16 @@ import java.nio.ByteOrder
 object AudioProcessor {
 
     private const val TAG = "AudioProcessor"
-    private const val MAX_LOG_ENTRIES = 30
+    private const val MAX_LOG_ENTRIES = 200
 
     /** Visible diagnostics log — shown in debug panel. */
     private val logEntries = mutableListOf<String>()
 
     fun getLog(): List<String> = synchronized(logEntries) { logEntries.toList() }
 
-    private fun log(msg: String) {
+    /** Public so other server components (e.g. ApiServer.serveAudio) can
+     *  append to the same visible audio log. */
+    fun log(msg: String) {
         Log.d(TAG, msg)
         synchronized(logEntries) {
             logEntries.add("[${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date())}] $msg")
