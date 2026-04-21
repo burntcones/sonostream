@@ -7,6 +7,7 @@ import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
+import android.view.WindowManager
 import android.webkit.*
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -33,6 +34,14 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         instance = this
+
+        // Keep screen on while the Aux activity is foregrounded. For cafe-
+        // tablet deployments this is almost always the desired behavior —
+        // the tablet is plugged in and showing the app. Belt-and-suspenders
+        // with the Kotlin-side PlaybackMonitor (which auto-advances even
+        // with screen off), but avoids any edge case where the WebView's
+        // JS timers get throttled and break UI responsiveness.
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         webView = WebView(this).apply {
             settings.javaScriptEnabled = true

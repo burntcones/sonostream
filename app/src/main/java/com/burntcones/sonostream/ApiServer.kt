@@ -24,10 +24,127 @@ class ApiServer(
     @Volatile var processingFile: String? = null
         private set
 
+    // ── Server-side playback queue + auto-advance monitor ───────────────
+    // Rationale: the WebView's JS polling loop (which previously drove auto-
+    // advance) is paused/throttled by Android when the screen is off or the
+    // app is backgrounded — causing long stretches of silence between tracks
+    // (CLAUDE.md bug "stops randomly"). By tracking the queue and monitoring
+    // Sonos transport state from Kotlin, auto-advance runs under the service's
+    // wake lock regardless of UI state.
+    @Volatile private var queueFiles: List<String> = emptyList()
+    @Volatile private var queueIndex: Int = 0
+    @Volatile private var queueSpeakerName: String = ""
+    @Volatile private var lastMonitoredState: String = ""
+    @Volatile private var monitorRunning: Boolean = true
+    private var monitorThread: Thread? = null
+
     init {
         LocalPlayer.init(context)
         LocalPlayer.liveEq = eq
         eq.load(context)
+        startPlaybackMonitor()
+    }
+
+    private fun startPlaybackMonitor() {
+        if (monitorThread?.isAlive == true) return
+        monitorRunning = true
+        monitorThread = Thread({
+            while (monitorRunning && !Thread.currentThread().isInterrupted) {
+                try {
+                    Thread.sleep(3000)
+                    checkPlaybackForAutoAdvance()
+                } catch (e: InterruptedException) {
+                    break
+                } catch (e: Exception) {
+                    android.util.Log.w("PlaybackMonitor", "loop error: ${e.message}")
+                }
+            }
+        }, "PlaybackMonitor").apply {
+            isDaemon = true
+            start()
+        }
+    }
+
+    private fun checkPlaybackForAutoAdvance() {
+        val files = queueFiles
+        val speaker = queueSpeakerName
+        if (files.isEmpty() || speaker.isEmpty()) return
+        val sp = SonosManager.speakers[speaker] ?: return
+
+        val state = SonosManager.getTransportInfo(sp)
+        val prev = lastMonitoredState
+        lastMonitoredState = state
+
+        // Only fire on PLAYING → STOPPED transitions. PAUSED doesn't count
+        // (user intentionally paused), and repeated STOPPED polls don't count
+        // (we already advanced once or the user cleared the queue).
+        if (prev != "PLAYING" || state != "STOPPED") return
+
+        // Distinguish "track finished naturally" (position ≈ duration) from
+        // "user/Sonos stopped mid-track" (position far from duration).
+        val pos = SonosManager.getPositionInfo(sp)
+        val posSec = timeStrToSec(pos.optString("position", "0:00:00"))
+        val durSec = timeStrToSec(pos.optString("duration", "0:00:00"))
+        val naturalEnd = durSec > 0 && posSec >= durSec - 5
+
+        AudioProcessor.log("Monitor: state PLAYING->STOPPED, pos=${posSec}s dur=${durSec}s naturalEnd=$naturalEnd")
+
+        if (!naturalEnd) return
+
+        if (queueIndex + 1 >= files.size) {
+            AudioProcessor.log("Monitor: end of queue (${queueIndex + 1}/${files.size}), stopping auto-advance")
+            queueFiles = emptyList()
+            return
+        }
+
+        queueIndex++
+        val nextFile = files[queueIndex]
+        val fileName = File(nextFile).nameWithoutExtension
+        AudioProcessor.log("Monitor: auto-advance ${queueIndex}/${files.size} -> $fileName")
+
+        val localIp = getLocalIp()
+        val port = listeningPort
+        val encodedPath = java.net.URLEncoder.encode(nextFile, "UTF-8").replace("+", "%20")
+        val eqActive = !eq.bypass && eq.getBands().any { it.enabled && it.gainDb != 0f }
+        val cacheBust = if (eqActive) "?eq=${eq.settingsHash()}" else ""
+        val audioUri = "http://$localIp:$port/audio/$encodedPath$cacheBust"
+        SonosManager.playUri(sp, audioUri, fileName)
+        // Reset monitored state so we don't immediately re-fire when we see
+        // the next PLAYING→STOPPED (which will come at the END of this track).
+        lastMonitoredState = "TRANSITIONING"
+    }
+
+    private fun timeStrToSec(s: String): Int {
+        val parts = s.split(":")
+        return try {
+            when (parts.size) {
+                3 -> parts[0].toInt() * 3600 + parts[1].toInt() * 60 + parts[2].toInt()
+                2 -> parts[0].toInt() * 60 + parts[1].toInt()
+                else -> parts[0].toIntOrNull() ?: 0
+            }
+        } catch (_: Exception) { 0 }
+    }
+
+    private fun setServerQueue(speakerName: String, files: List<String>, startIndex: Int) {
+        queueSpeakerName = speakerName
+        queueFiles = files
+        queueIndex = startIndex.coerceIn(0, (files.size - 1).coerceAtLeast(0))
+        lastMonitoredState = "TRANSITIONING"  // avoid false trigger on first poll
+        AudioProcessor.log("Queue SET: $speakerName index=$queueIndex size=${files.size}")
+    }
+
+    private fun clearServerQueue(reason: String) {
+        if (queueFiles.isEmpty()) return
+        AudioProcessor.log("Queue CLEARED: $reason")
+        queueFiles = emptyList()
+        queueSpeakerName = ""
+    }
+
+    override fun stop() {
+        monitorRunning = false
+        monitorThread?.interrupt()
+        monitorThread = null
+        super.stop()
     }
 
     private fun localDeviceSpeaker(): JSONObject = JSONObject().apply {
@@ -198,6 +315,18 @@ class ApiServer(
                 if (sp == null || filePath.isEmpty()) {
                     jsonResponse(JSONObject().put("error", "Missing speaker or file"), Response.Status.BAD_REQUEST)
                 } else {
+                    // Optional queue payload from UI — enables server-side auto-advance.
+                    val queueArr = data.optJSONArray("queue")
+                    if (queueArr != null && queueArr.length() > 0) {
+                        val files = (0 until queueArr.length()).map { queueArr.getString(it) }
+                        val idx = data.optInt("queue_index", files.indexOf(filePath).coerceAtLeast(0))
+                        setServerQueue(speakerName, files, idx)
+                    } else {
+                        // Fallback: single-item queue so at least we don't try
+                        // to auto-advance past a track the UI didn't queue up.
+                        setServerQueue(speakerName, listOf(filePath), 0)
+                    }
+
                     val localIp = getLocalIp()
                     val port = listeningPort
                     val encodedPath = java.net.URLEncoder.encode(filePath, "UTF-8").replace("+", "%20")
@@ -216,6 +345,9 @@ class ApiServer(
                 if (sp == null || action.isEmpty()) {
                     jsonResponse(JSONObject().put("error", "Missing speaker or action"), Response.Status.BAD_REQUEST)
                 } else {
+                    // A user-initiated Stop should disable auto-advance so we
+                    // don't immediately re-play the track they just stopped.
+                    if (action == "Stop") clearServerQueue("user Stop")
                     jsonResponse(JSONObject().put("success", SonosManager.transportAction(sp, action)))
                 }
             }
@@ -395,6 +527,9 @@ class ApiServer(
                 if (speakerNames.length() == 0 || filePath.isEmpty()) {
                     jsonResponse(JSONObject().put("error", "Missing speakers or file"), Response.Status.BAD_REQUEST)
                 } else {
+                    // Multi-speaker playback doesn't get server-side auto-advance
+                    // in this version — the UI handles advance for multi.
+                    clearServerQueue("multi-speaker play")
                     val localIp = getLocalIp()
                     val port = listeningPort
                     val encodedPath = java.net.URLEncoder.encode(filePath, "UTF-8").replace("+", "%20")
@@ -418,6 +553,7 @@ class ApiServer(
                 if (speakerNames.length() == 0 || action.isEmpty()) {
                     jsonResponse(JSONObject().put("error", "Missing speakers or action"), Response.Status.BAD_REQUEST)
                 } else {
+                    if (action == "Stop") clearServerQueue("multi user Stop")
                     val results = JSONObject()
                     for (i in 0 until speakerNames.length()) {
                         val name = speakerNames.getString(i)

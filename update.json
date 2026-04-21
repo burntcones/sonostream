@@ -1,6 +1,6 @@
 {
-  "versionCode": 24,
-  "versionName": "2.3.2",
-  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v2.3.2/aux.apk",
-  "releaseNotes": "Diagnostic build: better logs on the /audio/ path so we can see what's happening when playback stops. No feature changes."
+  "versionCode": 25,
+  "versionName": "2.3.3",
+  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v2.3.3/aux.apk",
+  "releaseNotes": "Fix auto-advance: tracks now advance even when screen is off. Server-side playback queue + monitor thread, plus keep-screen-on while the app is visible."
 }

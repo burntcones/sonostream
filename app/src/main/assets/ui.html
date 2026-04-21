@@ -1221,11 +1221,20 @@ async function playFile(path, buildQueue = true) {
     if (local) {
       result = await api('POST', '/api/local/play', { file: path });
     }
-    // Play on Sonos speakers
+    // Play on Sonos speakers. For single-speaker playback we also send the
+    // full queue so the server can auto-advance when a track ends naturally
+    // — this runs regardless of whether the tablet screen is on or the
+    // WebView's JS timers are throttled, which was the cause of long silent
+    // gaps between tracks.
     if (sonos.length > 1) {
       result = await api('POST', '/api/play-multi', { speakers: sonos.map(s => s.name), file: path });
     } else if (sonos.length === 1) {
-      result = await api('POST', '/api/play', { speaker: sonos[0].name, file: path });
+      result = await api('POST', '/api/play', {
+        speaker: sonos[0].name,
+        file: path,
+        queue: queue.map(f => f.path),
+        queue_index: queueIndex,
+      });
     }
     if (result && result.success === false) {
       showToast('Speaker could not play this file.', 'error');
@@ -1433,7 +1442,14 @@ async function fetchStatus() {
     }
 
     // Auto-advance: track finished (was PLAYING, now STOPPED, position near duration)
-    if (!autoAdvancing && lastPlayState === 'PLAYING' && newState === 'STOPPED' && dur > 0 && (dur - pos) < 5 && queue.length > 0) {
+    // For single-speaker Sonos playback the server handles this via
+    // ApiServer's PlaybackMonitor — running in Kotlin under the foreground
+    // service's wake lock so it works when the screen is off. We only fire
+    // the client-side auto-advance when the server isn't (i.e. multi-speaker
+    // playback or local-device playback), to avoid double-advancing.
+    const sonosNow = sonosSpeakers();
+    const serverHandlesAdvance = sonosNow.length === 1 && !hasLocalSpeaker();
+    if (!serverHandlesAdvance && !autoAdvancing && lastPlayState === 'PLAYING' && newState === 'STOPPED' && dur > 0 && (dur - pos) < 5 && queue.length > 0) {
       autoAdvancing = true;
       lastPlayState = newState;
       playNext(1);
