@@ -2114,23 +2114,63 @@ $('btnStop').insertAdjacentHTML('afterend',
 $('btnEqToggle').addEventListener('click', toggleEqPanel);
 
 // ─── Debug Panel (long-press logo) ─────────────────────────────────────────
+// Uses pointer events (more reliable than touchstart/touchend on Android
+// WebView — doesn't fire phantom 'touchcancel' when the browser starts to
+// interpret the hold as a scroll gesture). Also opens the panel on a
+// deliberate 5-tap-in-3s as a fallback in case long-press is blocked by
+// an overlaying element or a long-press browser menu on a given Android
+// build.
 let debugLongPress = null;
-document.querySelector('.logo').addEventListener('touchstart', () => {
+let debugPressX = 0, debugPressY = 0;
+const logoEl = document.querySelector('.logo');
+logoEl.style.userSelect = 'none';
+logoEl.style.webkitUserSelect = 'none';
+logoEl.style.webkitTouchCallout = 'none'; // stops Android long-press menu
+logoEl.style.cursor = 'pointer';
+
+function cancelDebugPress() {
+  if (debugLongPress) { clearTimeout(debugLongPress); debugLongPress = null; }
+}
+
+function openDebugPanel() {
+  $('debugPanel').style.display = 'block';
+  refreshDebugLogs();
+  if (navigator.vibrate) { try { navigator.vibrate(30); } catch (_) {} }
+}
+
+logoEl.addEventListener('pointerdown', e => {
+  debugPressX = e.clientX; debugPressY = e.clientY;
+  cancelDebugPress();
   debugLongPress = setTimeout(() => {
-    $('debugPanel').style.display = 'block';
-    refreshDebugLogs();
-  }, 1500);
+    debugLongPress = null;
+    openDebugPanel();
+  }, 800);
 });
-document.querySelector('.logo').addEventListener('touchend', () => clearTimeout(debugLongPress));
-document.querySelector('.logo').addEventListener('touchcancel', () => clearTimeout(debugLongPress));
-// Also support mouse long-press for desktop testing
-document.querySelector('.logo').addEventListener('mousedown', () => {
-  debugLongPress = setTimeout(() => {
-    $('debugPanel').style.display = 'block';
-    refreshDebugLogs();
-  }, 1500);
+
+logoEl.addEventListener('pointermove', e => {
+  if (!debugLongPress) return;
+  const dx = e.clientX - debugPressX, dy = e.clientY - debugPressY;
+  // Cancel long-press only if finger moves > 15px (ignores micro-wobble that
+  // was causing touchcancel to kill the old implementation).
+  if (Math.hypot(dx, dy) > 15) cancelDebugPress();
 });
-document.querySelector('.logo').addEventListener('mouseup', () => clearTimeout(debugLongPress));
+
+logoEl.addEventListener('pointerup', cancelDebugPress);
+logoEl.addEventListener('pointercancel', cancelDebugPress);
+logoEl.addEventListener('pointerleave', cancelDebugPress);
+
+// Fallback: 5 taps on the logo within 3s also opens the debug panel. Useful
+// if the tablet has a flaky long-press (e.g. some launcher overlays).
+let debugTapCount = 0, debugTapResetTimer = null;
+logoEl.addEventListener('click', () => {
+  debugTapCount++;
+  clearTimeout(debugTapResetTimer);
+  debugTapResetTimer = setTimeout(() => { debugTapCount = 0; }, 3000);
+  if (debugTapCount >= 5) {
+    debugTapCount = 0;
+    openDebugPanel();
+  }
+});
 
 async function refreshDebugLogs() {
   try {
