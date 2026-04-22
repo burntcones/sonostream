@@ -69,6 +69,13 @@ class ApiServer(
     @Volatile private var lastRetryFile: String = ""
     @Volatile private var lastRetryAtMs: Long = 0L
 
+    // Position-stagnation tracking: detect "Sonos reports PLAYING but the
+    // position is frozen" — zombie-PLAYING state where no UPnP transition
+    // fires even though sound has stopped.
+    @Volatile private var lastPositionSec: Int = -1
+    @Volatile private var lastPositionChangeAtMs: Long = 0L
+    private val STAGNATION_THRESHOLD_MS = 30_000L
+
     private fun checkPlaybackForAutoAdvance() {
         val files = queueFiles
         val speaker = queueSpeakerName
@@ -79,18 +86,50 @@ class ApiServer(
         val prev = lastMonitoredState
         lastMonitoredState = state
 
-        // Only fire on PLAYING → STOPPED transitions. PAUSED doesn't count
-        // (user intentionally paused), and repeated STOPPED polls don't count
-        // (we already advanced once or the user cleared the queue).
-        if (prev != "PLAYING" || state != "STOPPED") return
-
-        // Distinguish "track finished naturally" (position ≈ duration) from
-        // "Sonos dropped mid-track" (position far from duration).
+        val now = System.currentTimeMillis()
         val pos = SonosManager.getPositionInfo(sp)
         val posSec = timeStrToSec(pos.optString("position", "0:00:00"))
         val durSec = timeStrToSec(pos.optString("duration", "0:00:00"))
-        val naturalEnd = durSec > 0 && posSec >= durSec - 5
 
+        // ── Position-stagnation path ──────────────────────────────────
+        // If state is PLAYING but position hasn't advanced in 30s, Sonos is
+        // in a zombie-PLAYING state: buffer drained, audio pipeline glitched,
+        // or track finished without emitting a STOPPED transition. We won't
+        // see PLAYING→STOPPED, so react to the frozen position instead.
+        //
+        // Skip detection entirely when position is 0 — Sonos reports 0 for
+        // long tracks where it can't compute position, and we don't want
+        // to false-trigger on that.
+        if (state == "PLAYING" && posSec > 0) {
+            if (posSec != lastPositionSec) {
+                lastPositionSec = posSec
+                lastPositionChangeAtMs = now
+            } else if (lastPositionChangeAtMs > 0 && (now - lastPositionChangeAtMs) > STAGNATION_THRESHOLD_MS) {
+                val currentFile = files.getOrNull(queueIndex)
+                if (currentFile != null) {
+                    val atEnd = durSec > 0 && posSec >= durSec - 10
+                    AudioProcessor.log("Monitor: PLAYING but position frozen at ${posSec}s/${durSec}s for >30s (atEnd=$atEnd) — ${if (atEnd) "advancing" else "retry-then-advance"}")
+                    lastPositionSec = -1
+                    lastPositionChangeAtMs = 0L
+                    if (atEnd) {
+                        lastRetryFile = ""
+                        lastRetryAtMs = 0L
+                        autoAdvanceToNext(files, sp)
+                    } else {
+                        handleUnexpectedStopRecovery(currentFile, files, sp, now)
+                    }
+                    return
+                }
+            }
+        } else {
+            lastPositionSec = -1
+            lastPositionChangeAtMs = 0L
+        }
+
+        // ── PLAYING → STOPPED transition path (original logic) ────────
+        if (prev != "PLAYING" || state != "STOPPED") return
+
+        val naturalEnd = durSec > 0 && posSec >= durSec - 5
         AudioProcessor.log("Monitor: state PLAYING->STOPPED, pos=${posSec}s dur=${durSec}s naturalEnd=$naturalEnd")
 
         val currentFile = files.getOrNull(queueIndex) ?: return
@@ -103,26 +142,30 @@ class ApiServer(
             return
         }
 
-        // Unexpected stop mid-track. Based on diagnostic logs, this happens
-        // when Sonos drops the HTTP stream after filling its read-ahead
-        // buffer on long files and either its TCP connection times out or
-        // its firmware treats the idle connection as end-of-stream. Since
-        // Sonos doesn't auto-reconnect, the cafe goes silent.
-        //
-        // Recovery policy: retry the same track once — in many cases Sonos
-        // will resume fine on a fresh SetAVTransportURI+Play. If the same
-        // track fails AGAIN within 60s, advance to the next file instead
-        // (don't loop on one problematic file forever).
-        val now = System.currentTimeMillis()
-        val recentRetry = (now - lastRetryAtMs) < 60_000L && currentFile == lastRetryFile
+        handleUnexpectedStopRecovery(currentFile, files, sp, now)
+    }
 
+    /**
+     * Recovery policy shared between the PLAYING→STOPPED path and the
+     * position-stagnation path: retry the same track once (Sonos often
+     * recovers on a fresh SetAVTransportURI+Play), and if the SAME track
+     * fails again within 60s, advance instead so we don't loop forever on
+     * one problematic file.
+     */
+    private fun handleUnexpectedStopRecovery(
+        currentFile: String,
+        files: List<String>,
+        sp: SonosSpeaker,
+        now: Long,
+    ) {
+        val recentRetry = (now - lastRetryAtMs) < 60_000L && currentFile == lastRetryFile
         if (recentRetry) {
             AudioProcessor.log("Monitor: retry exhausted for ${File(currentFile).name} — advancing")
             lastRetryFile = ""
             lastRetryAtMs = 0L
             autoAdvanceToNext(files, sp)
         } else {
-            AudioProcessor.log("Monitor: unexpected STOP for ${File(currentFile).name} — retrying same track")
+            AudioProcessor.log("Monitor: unexpected stop for ${File(currentFile).name} — retrying same track")
             lastRetryFile = currentFile
             lastRetryAtMs = now
             playTrackOnSonos(currentFile, sp)

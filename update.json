@@ -1,6 +1,6 @@
 {
-  "versionCode": 28,
-  "versionName": "2.3.6",
-  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v2.3.6/aux.apk",
-  "releaseNotes": "Fix random mid-track stops: auto-retry the same track once, then advance if Sonos stops again. Also recover from stale WiFi network binding (EPERM) that was silently breaking SOAP calls after WiFi events."
+  "versionCode": 29,
+  "versionName": "2.3.7",
+  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v2.3.7/aux.apk",
+  "releaseNotes": "Detect zombie-PLAYING state: when Sonos claims to be playing but position is frozen (buffer drained / audio pipeline stalled), auto-recover by retrying the track, then advancing."
 }
