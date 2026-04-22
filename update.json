@@ -1,6 +1,6 @@
 {
-  "versionCode": 27,
-  "versionName": "2.3.5",
-  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v2.3.5/aux.apk",
-  "releaseNotes": "Fix debug-panel long-press on tablets. Pointer events instead of touch events, shorter hold (800ms), haptic feedback, tolerant of finger wobble. 5-tap-on-logo backup if long-press still fails."
+  "versionCode": 28,
+  "versionName": "2.3.6",
+  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v2.3.6/aux.apk",
+  "releaseNotes": "Fix random mid-track stops: auto-retry the same track once, then advance if Sonos stops again. Also recover from stale WiFi network binding (EPERM) that was silently breaking SOAP calls after WiFi events."
 }

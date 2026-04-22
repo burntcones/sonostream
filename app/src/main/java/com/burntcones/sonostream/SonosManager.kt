@@ -528,14 +528,37 @@ object SonosManager {
     // ── UPnP SOAP ───────────────────────────────────────────────────────
 
     private fun soap(speaker: SonosSpeaker, serviceUrl: String, serviceType: String, action: String, argsXml: String = "", timeoutMs: Int = 5000): Pair<Int, String> {
-        return try {
-            val body = """<?xml version="1.0" encoding="utf-8"?>
+        val body = """<?xml version="1.0" encoding="utf-8"?>
 <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
 <s:Body><u:$action xmlns:u="$serviceType">$argsXml</u:$action></s:Body>
 </s:Envelope>"""
 
-            val url = URL("http://${speaker.ip}:${speaker.port}$serviceUrl")
-            val conn = openWifiConnection(url)
+        val url = URL("http://${speaker.ip}:${speaker.port}$serviceUrl")
+
+        // First attempt: use the cached wifiNet binding (if any).
+        var result = attemptSoap(url, body, serviceType, action, timeoutMs, wifiNet)
+
+        // If the cached Network handle has gone stale (WiFi switched or the
+        // handle was revoked by Android), per-socket bind fails with EPERM.
+        // Clear the bad handle and retry once using the default route — this
+        // keeps SOAP working until the next discovery() populates a fresh
+        // wifiNet. Without this, every subsequent SOAP call fails forever.
+        val msg = result.second
+        if (result.first == 500 && (msg.contains("EPERM") || msg.contains("Binding socket to network"))) {
+            logSoap("WARN: stale wifiNet binding (${msg.take(100)}); clearing and retrying without bind")
+            wifiNet = null
+            result = attemptSoap(url, body, serviceType, action, timeoutMs, null)
+        }
+        return result
+    }
+
+    /** Single SOAP attempt, optionally bound to a specific Network. */
+    private fun attemptSoap(
+        url: URL, body: String, serviceType: String, action: String,
+        timeoutMs: Int, net: android.net.Network?
+    ): Pair<Int, String> {
+        return try {
+            val conn = (if (net != null) net.openConnection(url) else url.openConnection()) as HttpURLConnection
             conn.requestMethod = "POST"
             conn.connectTimeout = timeoutMs
             conn.readTimeout = timeoutMs

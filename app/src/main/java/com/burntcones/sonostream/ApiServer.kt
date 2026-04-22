@@ -65,6 +65,10 @@ class ApiServer(
         }
     }
 
+    // Recovery tracking for unexpected STOPs (see checkPlaybackForAutoAdvance).
+    @Volatile private var lastRetryFile: String = ""
+    @Volatile private var lastRetryAtMs: Long = 0L
+
     private fun checkPlaybackForAutoAdvance() {
         val files = queueFiles
         val speaker = queueSpeakerName
@@ -81,7 +85,7 @@ class ApiServer(
         if (prev != "PLAYING" || state != "STOPPED") return
 
         // Distinguish "track finished naturally" (position ≈ duration) from
-        // "user/Sonos stopped mid-track" (position far from duration).
+        // "Sonos dropped mid-track" (position far from duration).
         val pos = SonosManager.getPositionInfo(sp)
         val posSec = timeStrToSec(pos.optString("position", "0:00:00"))
         val durSec = timeStrToSec(pos.optString("duration", "0:00:00"))
@@ -89,28 +93,66 @@ class ApiServer(
 
         AudioProcessor.log("Monitor: state PLAYING->STOPPED, pos=${posSec}s dur=${durSec}s naturalEnd=$naturalEnd")
 
-        if (!naturalEnd) return
+        val currentFile = files.getOrNull(queueIndex) ?: return
 
+        if (naturalEnd) {
+            // Reset retry bookkeeping — we completed a track cleanly.
+            lastRetryFile = ""
+            lastRetryAtMs = 0L
+            autoAdvanceToNext(files, sp)
+            return
+        }
+
+        // Unexpected stop mid-track. Based on diagnostic logs, this happens
+        // when Sonos drops the HTTP stream after filling its read-ahead
+        // buffer on long files and either its TCP connection times out or
+        // its firmware treats the idle connection as end-of-stream. Since
+        // Sonos doesn't auto-reconnect, the cafe goes silent.
+        //
+        // Recovery policy: retry the same track once — in many cases Sonos
+        // will resume fine on a fresh SetAVTransportURI+Play. If the same
+        // track fails AGAIN within 60s, advance to the next file instead
+        // (don't loop on one problematic file forever).
+        val now = System.currentTimeMillis()
+        val recentRetry = (now - lastRetryAtMs) < 60_000L && currentFile == lastRetryFile
+
+        if (recentRetry) {
+            AudioProcessor.log("Monitor: retry exhausted for ${File(currentFile).name} — advancing")
+            lastRetryFile = ""
+            lastRetryAtMs = 0L
+            autoAdvanceToNext(files, sp)
+        } else {
+            AudioProcessor.log("Monitor: unexpected STOP for ${File(currentFile).name} — retrying same track")
+            lastRetryFile = currentFile
+            lastRetryAtMs = now
+            playTrackOnSonos(currentFile, sp)
+        }
+    }
+
+    /** Advance the queue index and start playing the next file on [sp]. */
+    private fun autoAdvanceToNext(files: List<String>, sp: SonosSpeaker) {
         if (queueIndex + 1 >= files.size) {
             AudioProcessor.log("Monitor: end of queue (${queueIndex + 1}/${files.size}), stopping auto-advance")
             queueFiles = emptyList()
             return
         }
-
         queueIndex++
         val nextFile = files[queueIndex]
-        val fileName = File(nextFile).nameWithoutExtension
-        AudioProcessor.log("Monitor: auto-advance ${queueIndex}/${files.size} -> $fileName")
+        AudioProcessor.log("Monitor: auto-advance ${queueIndex}/${files.size} -> ${File(nextFile).name}")
+        playTrackOnSonos(nextFile, sp)
+    }
 
+    /** Build the audio URI for [file] and call playUri on [sp]. */
+    private fun playTrackOnSonos(file: String, sp: SonosSpeaker) {
         val localIp = getLocalIp()
         val port = listeningPort
-        val encodedPath = java.net.URLEncoder.encode(nextFile, "UTF-8").replace("+", "%20")
+        val encodedPath = java.net.URLEncoder.encode(file, "UTF-8").replace("+", "%20")
         val eqActive = !eq.bypass && eq.getBands().any { it.enabled && it.gainDb != 0f }
         val cacheBust = if (eqActive) "?eq=${eq.settingsHash()}" else ""
         val audioUri = "http://$localIp:$port/audio/$encodedPath$cacheBust"
-        SonosManager.playUri(sp, audioUri, fileName)
-        // Reset monitored state so we don't immediately re-fire when we see
-        // the next PLAYING→STOPPED (which will come at the END of this track).
+        val title = File(file).nameWithoutExtension
+        SonosManager.playUri(sp, audioUri, title)
+        // Reset so the very next poll doesn't see PLAYING→STOPPED spuriously.
         lastMonitoredState = "TRANSITIONING"
     }
 
