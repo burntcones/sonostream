@@ -53,6 +53,7 @@ class MainActivity : AppCompatActivity() {
             webChromeClient = WebChromeClient()
             addJavascriptInterface(UpdateBridge(this@MainActivity), "NativeUpdate")
             addJavascriptInterface(MediaBridge(), "NativeMedia")
+            addJavascriptInterface(ShareBridge(this@MainActivity), "NativeShare")
         }
         setContentView(webView)
 
@@ -178,6 +179,31 @@ class MainActivity : AppCompatActivity() {
         instance = null
         multicastLock?.release()
         super.onDestroy()
+    }
+
+    /**
+     * JavaScript bridge for sharing debug logs to other apps.
+     * The debug panel's Share button calls window.NativeShare.shareText(...)
+     * which opens the Android share sheet so remote staff can send logs to
+     * the admin without knowing curl / IP addresses.
+     */
+    class ShareBridge(private val activity: MainActivity) {
+        @JavascriptInterface
+        fun shareText(text: String) {
+            activity.runOnUiThread {
+                try {
+                    val intent = Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(Intent.EXTRA_SUBJECT, "Aux debug logs")
+                        putExtra(Intent.EXTRA_TEXT, text)
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                    }
+                    activity.startActivity(Intent.createChooser(intent, "Share Aux logs"))
+                } catch (e: Exception) {
+                    Toast.makeText(activity, "Share failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
     }
 
     /**

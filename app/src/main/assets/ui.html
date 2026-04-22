@@ -891,6 +891,7 @@ html, body {
       <h2 style="font-size:16px;">Debug Logs</h2>
       <div style="display:flex;gap:8px;">
         <button onclick="refreshDebugLogs()" style="padding:6px 12px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text);font-size:12px;">Refresh</button>
+        <button onclick="shareDebugLogs()" style="padding:6px 12px;border:1px solid var(--accent);border-radius:8px;background:var(--accent);color:#fff;font-size:12px;font-weight:600;">Share</button>
         <button onclick="$('debugPanel').style.display='none'" style="padding:6px 12px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text);font-size:12px;">Close</button>
       </div>
     </div>
@@ -2163,6 +2164,37 @@ async function refreshDebugLogs() {
     $('debugContent').textContent = 'Error fetching debug info: ' + e.message;
   }
 }
+
+/**
+ * Share the current debug panel content via the Android share sheet
+ * (Messages / WhatsApp / email / etc). Used by remote staff to send logs
+ * to the admin without needing terminal / IP access.
+ */
+async function shareDebugLogs() {
+  // Make sure the panel has fresh content before sharing
+  await refreshDebugLogs();
+  const versionLine = 'App: Aux ' + (window._appVersion || 'unknown') + ' — ' + new Date().toISOString() + '\n\n';
+  const body = versionLine + ($('debugContent').textContent || '(no content)');
+  if (window.NativeShare && typeof window.NativeShare.shareText === 'function') {
+    window.NativeShare.shareText(body);
+  } else {
+    // Fallback for running in a regular browser (no native bridge)
+    try {
+      await navigator.clipboard.writeText(body);
+      showToast('Logs copied to clipboard.', 'success');
+    } catch (_) {
+      showToast('Share not available in this browser.', 'warning');
+    }
+  }
+}
+
+// Fetch and cache the app version string for inclusion in shared logs
+(async function fetchAppVersion() {
+  try {
+    const v = await api('GET', '/api/version');
+    window._appVersion = v.versionName + ' (code ' + v.versionCode + ')';
+  } catch (_) { /* best-effort */ }
+})();
 
 // ─── Init ───────────────────────────────────────────────────────────────────
 // ─── OTA Update ────────────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 {
-  "versionCode": 25,
-  "versionName": "2.3.3",
-  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v2.3.3/aux.apk",
-  "releaseNotes": "Fix auto-advance: tracks now advance even when screen is off. Server-side playback queue + monitor thread, plus keep-screen-on while the app is visible."
+  "versionCode": 26,
+  "versionName": "2.3.4",
+  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v2.3.4/aux.apk",
+  "releaseNotes": "Share button added to the debug panel. Staff can long-press the Aux logo, tap Share, and send the full debug logs via Messages/WhatsApp/email — no terminal needed."
 }
