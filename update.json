@@ -1,6 +1,6 @@
 {
-  "versionCode": 29,
-  "versionName": "2.3.7",
-  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v2.3.7/aux.apk",
-  "releaseNotes": "Detect zombie-PLAYING state: when Sonos claims to be playing but position is frozen (buffer drained / audio pipeline stalled), auto-recover by retrying the track, then advancing."
+  "versionCode": 30,
+  "versionName": "2.3.8",
+  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v2.3.8/aux.apk",
+  "releaseNotes": "Always advance to the next queue track on unexpected Sonos stop, instead of retrying the same track. The previous retry caused Sonos to restart the URI from byte 0, which on long files looped the first 10 minutes forever."
 }

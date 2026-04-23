@@ -65,10 +65,6 @@ class ApiServer(
         }
     }
 
-    // Recovery tracking for unexpected STOPs (see checkPlaybackForAutoAdvance).
-    @Volatile private var lastRetryFile: String = ""
-    @Volatile private var lastRetryAtMs: Long = 0L
-
     // Position-stagnation tracking: detect "Sonos reports PLAYING but the
     // position is frozen" — zombie-PLAYING state where no UPnP transition
     // fires even though sound has stopped.
@@ -92,14 +88,11 @@ class ApiServer(
         val durSec = timeStrToSec(pos.optString("duration", "0:00:00"))
 
         // ── Position-stagnation path ──────────────────────────────────
-        // If state is PLAYING but position hasn't advanced in 30s, Sonos is
-        // in a zombie-PLAYING state: buffer drained, audio pipeline glitched,
-        // or track finished without emitting a STOPPED transition. We won't
-        // see PLAYING→STOPPED, so react to the frozen position instead.
-        //
-        // Skip detection entirely when position is 0 — Sonos reports 0 for
-        // long tracks where it can't compute position, and we don't want
-        // to false-trigger on that.
+        // State is PLAYING but position hasn't advanced in >30s → Sonos is
+        // stuck (buffer drained, audio pipeline glitch, track finished
+        // without a STOPPED transition). Skip the check when position is 0,
+        // which Sonos returns for very long tracks where it can't compute
+        // position.
         if (state == "PLAYING" && posSec > 0) {
             if (posSec != lastPositionSec) {
                 lastPositionSec = posSec
@@ -108,16 +101,10 @@ class ApiServer(
                 val currentFile = files.getOrNull(queueIndex)
                 if (currentFile != null) {
                     val atEnd = durSec > 0 && posSec >= durSec - 10
-                    AudioProcessor.log("Monitor: PLAYING but position frozen at ${posSec}s/${durSec}s for >30s (atEnd=$atEnd) — ${if (atEnd) "advancing" else "retry-then-advance"}")
+                    AudioProcessor.log("Monitor: PLAYING but position frozen at ${posSec}s/${durSec}s for >30s (atEnd=$atEnd) — advancing")
                     lastPositionSec = -1
                     lastPositionChangeAtMs = 0L
-                    if (atEnd) {
-                        lastRetryFile = ""
-                        lastRetryAtMs = 0L
-                        autoAdvanceToNext(files, sp)
-                    } else {
-                        handleUnexpectedStopRecovery(currentFile, files, sp, now)
-                    }
+                    autoAdvanceToNext(files, sp)
                     return
                 }
             }
@@ -126,7 +113,7 @@ class ApiServer(
             lastPositionChangeAtMs = 0L
         }
 
-        // ── PLAYING → STOPPED transition path (original logic) ────────
+        // ── PLAYING → STOPPED transition path ─────────────────────────
         if (prev != "PLAYING" || state != "STOPPED") return
 
         val naturalEnd = durSec > 0 && posSec >= durSec - 5
@@ -134,42 +121,19 @@ class ApiServer(
 
         val currentFile = files.getOrNull(queueIndex) ?: return
 
-        if (naturalEnd) {
-            // Reset retry bookkeeping — we completed a track cleanly.
-            lastRetryFile = ""
-            lastRetryAtMs = 0L
-            autoAdvanceToNext(files, sp)
-            return
-        }
-
-        handleUnexpectedStopRecovery(currentFile, files, sp, now)
-    }
-
-    /**
-     * Recovery policy shared between the PLAYING→STOPPED path and the
-     * position-stagnation path: retry the same track once (Sonos often
-     * recovers on a fresh SetAVTransportURI+Play), and if the SAME track
-     * fails again within 60s, advance instead so we don't loop forever on
-     * one problematic file.
-     */
-    private fun handleUnexpectedStopRecovery(
-        currentFile: String,
-        files: List<String>,
-        sp: SonosSpeaker,
-        now: Long,
-    ) {
-        val recentRetry = (now - lastRetryAtMs) < 60_000L && currentFile == lastRetryFile
-        if (recentRetry) {
-            AudioProcessor.log("Monitor: retry exhausted for ${File(currentFile).name} — advancing")
-            lastRetryFile = ""
-            lastRetryAtMs = 0L
-            autoAdvanceToNext(files, sp)
-        } else {
-            AudioProcessor.log("Monitor: unexpected stop for ${File(currentFile).name} — retrying same track")
-            lastRetryFile = currentFile
-            lastRetryAtMs = now
-            playTrackOnSonos(currentFile, sp)
-        }
+        // Always advance on PLAYING→STOPPED, whether natural end or an
+        // unexpected mid-track drop. Previous versions retried the same
+        // track on unexpected stops, but the "retry" caused Sonos to
+        // restart the URI from byte 0 (Sonos doesn't preserve position on
+        // fresh SetAVTransportURI), which on long files turned into a
+        // first-10-minutes-on-repeat loop when Sonos kept dropping the
+        // stream every ~10 min. Advancing keeps the queue moving through
+        // distinct tracks instead of looping one.
+        AudioProcessor.log(
+            if (naturalEnd) "Monitor: natural end of ${File(currentFile).name} — advancing"
+            else "Monitor: unexpected stop for ${File(currentFile).name} — advancing"
+        )
+        autoAdvanceToNext(files, sp)
     }
 
     /** Advance the queue index and start playing the next file on [sp]. */
