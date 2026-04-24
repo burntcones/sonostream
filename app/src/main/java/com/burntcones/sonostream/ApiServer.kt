@@ -397,7 +397,29 @@ class ApiServer(
                     // A user-initiated Stop should disable auto-advance so we
                     // don't immediately re-play the track they just stopped.
                     if (action == "Stop") clearServerQueue("user Stop")
-                    jsonResponse(JSONObject().put("success", SonosManager.transportAction(sp, action)))
+                    val success = SonosManager.transportAction(sp, action)
+
+                    // Sonos sometimes 200-OKs a Play command but doesn't
+                    // actually transition out of PAUSED_PLAYBACK — the stream
+                    // sits in paused-buffering mode and the cafe hears nothing.
+                    // Verify the transition 5 seconds later and re-issue Play
+                    // once if Sonos is still stuck. Only runs for explicit
+                    // user Play commands so it can't interfere with a
+                    // deliberately paused state.
+                    if (action == "Play" && success) {
+                        Thread {
+                            try {
+                                Thread.sleep(5000)
+                                val state = SonosManager.getTransportInfo(sp)
+                                if (state != "PLAYING" && state != "TRANSITIONING") {
+                                    AudioProcessor.log("Play verify: state=$state 5s after Play — re-issuing Play")
+                                    SonosManager.transportAction(sp, "Play")
+                                }
+                            } catch (_: Exception) { /* best-effort */ }
+                        }.start()
+                    }
+
+                    jsonResponse(JSONObject().put("success", success))
                 }
             }
 
