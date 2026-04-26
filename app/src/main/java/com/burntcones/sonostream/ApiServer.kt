@@ -38,6 +38,18 @@ class ApiServer(
     @Volatile private var monitorRunning: Boolean = true
     private var monitorThread: Thread? = null
 
+    // Audio-activity tracking for zombie-PLAYING detection on tracks where
+    // Sonos's GetPositionInfo returns position=0 (common for the long lofi
+    // mixes — the v2.3.7 position-stagnation check is gated on pos>0 and
+    // therefore never fires for these). Tracks bytes-flowing-to-Sonos and
+    // the type of the last /audio close, so the monitor can distinguish
+    // "Sonos is normally buffer-draining a COMPLETE track" from "Sonos
+    // dropped the connection and is now zombied in PLAYING state".
+    @Volatile private var lastAudioActivityMs: Long = 0L
+    @Volatile private var lastPrematureCloseMs: Long = 0L
+    @Volatile private var lastCompleteCloseMs: Long = 0L
+    @Volatile private var zombieAdvanceFiredForCloseMs: Long = 0L
+
     init {
         LocalPlayer.init(context)
         LocalPlayer.liveEq = eq
@@ -111,6 +123,30 @@ class ApiServer(
         } else {
             lastPositionSec = -1
             lastPositionChangeAtMs = 0L
+        }
+
+        // ── Post-PREMATURE_CLOSE zombie path ──────────────────────────
+        // For tracks where Sonos returns position=0 (long lofi mixes etc),
+        // the v2.3.7 position-stagnation check is gated and won't fire.
+        // Use audio-data-flow as an alternate signal: if the last /audio
+        // close was PREMATURE_CLOSE and Sonos is still claiming PLAYING
+        // with no state transition 60+ seconds later, it's the zombie
+        // case the staff describes ("playback stopped, opening the app
+        // resumes it"). Skip if last close was COMPLETE — long buffer
+        // drains are normal there and last for the entire track length.
+        if (state == "PLAYING" && lastPrematureCloseMs > 0L &&
+            lastPrematureCloseMs > lastCompleteCloseMs &&
+            lastPrematureCloseMs != zombieAdvanceFiredForCloseMs) {
+            val sinceClose = now - lastPrematureCloseMs
+            if (sinceClose in 60_000L..180_000L) {
+                val currentFile = files.getOrNull(queueIndex)
+                if (currentFile != null) {
+                    AudioProcessor.log("Monitor: state=PLAYING ${sinceClose / 1000}s after PREMATURE_CLOSE — treating as zombie, advancing")
+                    zombieAdvanceFiredForCloseMs = lastPrematureCloseMs
+                    autoAdvanceToNext(files, sp)
+                    return
+                }
+            }
         }
 
         // ── PLAYING → STOPPED transition path ─────────────────────────
@@ -187,6 +223,17 @@ class ApiServer(
         AudioProcessor.log("Queue CLEARED: $reason")
         queueFiles = emptyList()
         queueSpeakerName = ""
+    }
+
+    /** Called by CountingInputStream.close so the monitor can distinguish
+     *  natural buffer-drain (after COMPLETE) from zombie-PLAYING (after a
+     *  PREMATURE_CLOSE that didn't transition Sonos to STOPPED). */
+    private fun recordAudioCloseType(status: String) {
+        val now = System.currentTimeMillis()
+        when (status) {
+            "COMPLETE" -> lastCompleteCloseMs = now
+            "PREMATURE_CLOSE", "READ_FAIL" -> lastPrematureCloseMs = now
+        }
     }
 
     override fun stop() {
@@ -700,7 +747,11 @@ class ApiServer(
 
             val fis = FileInputStream(file)
             fis.skip(start)
-            val wrapped = CountingInputStream(fis, "${file.name}[$start-$end/$fileSize]", length, startTimeMs)
+            val wrapped = CountingInputStream(
+                fis, "${file.name}[$start-$end/$fileSize]", length, startTimeMs,
+                onActivity = { lastAudioActivityMs = System.currentTimeMillis() },
+                onClose = { status -> recordAudioCloseType(status) },
+            )
 
             val response = newFixedLengthResponse(Response.Status.PARTIAL_CONTENT, mime, wrapped, length)
             response.addHeader("Content-Range", "bytes $start-$end/$fileSize")
@@ -710,7 +761,11 @@ class ApiServer(
         }
 
         val fis = FileInputStream(file)
-        val wrapped = CountingInputStream(fis, file.name, fileSize, startTimeMs)
+        val wrapped = CountingInputStream(
+            fis, file.name, fileSize, startTimeMs,
+            onActivity = { lastAudioActivityMs = System.currentTimeMillis() },
+            onClose = { status -> recordAudioCloseType(status) },
+        )
         val response = newFixedLengthResponse(Response.Status.OK, mime, wrapped, fileSize)
         response.addHeader("Accept-Ranges", "bytes")
         return response
@@ -721,12 +776,17 @@ class ApiServer(
      * closes — either via normal EOF (Sonos read the full length) or because
      * NanoHTTPD gave up (Sonos disconnected mid-stream, e.g. random-playback-stop).
      * Comparing bytesRead vs expected tells us which one happened.
+     *
+     * Also calls back to the enclosing ApiServer so the playback monitor can
+     * detect zombie-PLAYING via audio-activity timestamps + close-type.
      */
     private class CountingInputStream(
         private val delegate: InputStream,
         private val label: String,
         private val expectedBytes: Long,
-        private val startTimeMs: Long
+        private val startTimeMs: Long,
+        private val onActivity: () -> Unit,
+        private val onClose: (status: String) -> Unit,
     ) : InputStream() {
         private var bytesRead = 0L
         private var closed = false
@@ -735,7 +795,10 @@ class ApiServer(
         override fun read(): Int {
             return try {
                 val b = delegate.read()
-                if (b >= 0) bytesRead++
+                if (b >= 0) {
+                    bytesRead++
+                    onActivity()
+                }
                 b
             } catch (e: Exception) {
                 if (!readFailed) {
@@ -749,7 +812,10 @@ class ApiServer(
         override fun read(b: ByteArray, off: Int, len: Int): Int {
             return try {
                 val n = delegate.read(b, off, len)
-                if (n > 0) bytesRead += n
+                if (n > 0) {
+                    bytesRead += n
+                    onActivity()
+                }
                 n
             } catch (e: Exception) {
                 if (!readFailed) {
@@ -773,6 +839,7 @@ class ApiServer(
                 else -> "PREMATURE_CLOSE"
             }
             AudioProcessor.log("/audio END ($status): $label — ${bytesRead}/${expectedBytes}b ($pct%) in ${elapsedMs}ms")
+            try { onClose(status) } catch (_: Exception) {}
             try { delegate.close() } catch (_: Exception) {}
         }
     }

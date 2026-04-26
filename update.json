@@ -1,6 +1,6 @@
 {
-  "versionCode": 31,
-  "versionName": "2.3.9",
-  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v2.3.9/aux.apk",
-  "releaseNotes": "Fix silent Play: when Sonos 200-OKs a Play command but doesn't actually leave PAUSED_PLAYBACK, verify after 5s and re-issue Play once."
+  "versionCode": 32,
+  "versionName": "2.3.10",
+  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v2.3.10/aux.apk",
+  "releaseNotes": "Catch zombie-PLAYING after Sonos drops a long-track stream: if state stays PLAYING 60+ seconds after a PREMATURE_CLOSE without transitioning to STOPPED, auto-advance instead of waiting for staff to tap the app."
 }
