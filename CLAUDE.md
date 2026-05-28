@@ -30,7 +30,7 @@ Multiple layered recovery handlers, all firing from the `PlaybackMonitor` in `Ap
 |---|---|---|
 | `PLAYING → STOPPED` (any cause) | Always advance to next queue track. Earlier versions retried the same track first; that caused Sonos to restart from byte 0 (no resume) which on long files just looped the first 10 min. | v2.3.6 → v2.3.8 |
 | `state=PLAYING` but position frozen 30 s+ (zombie #1) | Advance. Only fires when `pos > 0` so we don't false-trigger on tracks where Sonos returns position 0. | v2.3.7 |
-| `state=PLAYING` 60–180 s after a `PREMATURE_CLOSE` with no transition (zombie #2) | Advance. Catches the position-0 zombie case the v2.3.7 logic misses. Skipped after `COMPLETE` close because that's a legitimate buffer-drain. Tracks `lastAudioActivityMs` + `lastPrematureCloseMs` + `lastCompleteCloseMs` set by `CountingInputStream` callbacks. | v2.3.10 |
+| `state=PLAYING` 60–180 s after a `PREMATURE_CLOSE` with no transition (zombie #2) | Advance. Catches the position-0 zombie case the v2.3.7 logic misses. Skipped after `COMPLETE` close (legitimate buffer-drain) **and** when `lastAudioActivityMs > lastPrematureCloseMs` (a live stream has read bytes since the close). The activity guard was added v2.3.11 after an IOI dump showed the check firing ~60 s into a *healthy* ranged stream — the advance force-closed it, logged another `PREMATURE_CLOSE`, and re-armed itself into a self-sustaining ~60 s cascade through the whole queue. Tracks `lastAudioActivityMs` + `lastPrematureCloseMs` + `lastCompleteCloseMs` set by `CountingInputStream` callbacks. | v2.3.10, guarded v2.3.11 |
 | User-tapped Play returns 200 but Sonos stays PAUSED/STOPPED | Re-issue Play once after 5 s. Only fires within 5 s of an explicit `/api/control Play` so it can't undo a deliberate pause. | v2.3.9 |
 | Stale `wifiNet` Network handle (`Binding socket to network N failed: EPERM`) | Detect EPERM in SOAP fault body, clear `wifiNet`, retry once via default route. Next discovery repopulates with a fresh handle. | v2.3.6 |
 | Auto-advance fires but Sonos doesn't actually start playing | Open follow-up — instrument the post-advance state and ladder up if it ever shows in a dump. | (open) |
@@ -89,7 +89,7 @@ export ANDROID_HOME="$HOME/Library/Android/sdk"
 - Repo: github.com/burntcones/sonostream (public)
 - `gh` CLI is authenticated as `burntcones`
 - OTA manifest: `update.json` in repo root (raw URL: `https://raw.githubusercontent.com/burntcones/sonostream/main/update.json`)
-- Current version: versionCode 32, versionName 2.3.10
+- Current version: versionCode 33, versionName 2.3.11
 
 ## OTA Update Workflow
 1. Bump `versionCode` and `versionName` in `app/build.gradle`

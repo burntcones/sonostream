@@ -104,6 +104,28 @@ object SonosManager {
      *  state CHANGES from the 2-second polling loop, not every poll. */
     private val lastTransportState = ConcurrentHashMap<String, String>()
 
+    /** Last successful SOAP call per speaker (keyed by UUID, which is stable
+     *  across name/IP changes). Used by speakerCtx() to annotate failure logs
+     *  with "how long since this speaker last responded successfully" so we
+     *  can tell a brief blip from a speaker that's been unreachable for
+     *  minutes. v2.3.11 diagnostic. */
+    private val lastSoapSuccessMs = ConcurrentHashMap<String, Long>()
+
+    /** Compact failure context for a SOAP log entry: cached IP, short UUID,
+     *  and seconds since last successful SOAP. v2.3.11 diagnostic.
+     *
+     *  When the next debug dump comes in, this is what disambiguates:
+     *  - IP cached as X but discovery returns Y for the same UUID → stale IP cache (H3)
+     *  - Same UUID has been failing for hundreds of seconds → not a transient blip
+     *  - UUID differs from a previous-known coordinator UUID → group coordinator shift (H2)
+     */
+    private fun speakerCtx(sp: SonosSpeaker): String {
+        val last = lastSoapSuccessMs[sp.uuid]
+        val sinceSec = if (last != null) (System.currentTimeMillis() - last) / 1000 else -1L
+        val uuidShort = sp.uuid.removePrefix("uuid:").removePrefix("RINCON_").take(12)
+        return "ip=${sp.ip} u=$uuidShort lastOk=${sinceSec}s"
+    }
+
     private fun logSoap(msg: String) {
         val ts = java.text.SimpleDateFormat("HH:mm:ss.SSS", java.util.Locale.US).format(java.util.Date())
         val entry = "[$ts] $msg"
@@ -369,12 +391,14 @@ object SonosManager {
         // Query ZoneGroupTopology from the first available speaker
         val anySpeaker = discovered.values.first()
         val zgtUrl = "/ZoneGroupTopology/Control"
+        logSoap("ResolveGroups: querying ZGT via ${anySpeaker.name} ${speakerCtx(anySpeaker)} (${discovered.size} discovered)")
         val (status, data) = soap(anySpeaker, zgtUrl,
             "urn:schemas-upnp-org:service:ZoneGroupTopology:1",
             "GetZoneGroupState", "")
 
         if (status != 200 || data.isEmpty()) {
             // Fallback: return all speakers as individual coordinators
+            logSoap("ResolveGroups: ZGT query failed status=$status — falling back to individuals: ${discovered.values.joinToString { "${it.name}(${it.uuid.removePrefix("RINCON_").take(12)})" }}")
             return discovered.toMutableMap()
         }
 
@@ -440,6 +464,15 @@ object SonosManager {
         discovered.values.forEach { sp ->
             val alreadyRepresented = result.values.any { it.uuid == sp.uuid || it.groupMembers.contains(sp.name) }
             if (!alreadyRepresented) result[sp.name] = sp
+        }
+
+        // Log final group resolution: for each result, who's the coordinator
+        // (UUID), what's the group ID, and what's the member list. v2.3.11
+        // diagnostic so we can detect coordinator-role shifts at outlets like
+        // IOI where 2 grouped speakers may swap coordinator between sessions.
+        result.values.forEach { sp ->
+            val coordU = sp.uuid.removePrefix("RINCON_").take(12)
+            logSoap("ResolveGroups: ${sp.name} coord=$coordU ip=${sp.ip} group=${sp.groupId.take(20)} members=${sp.groupMembers}")
         }
 
         return if (result.isNotEmpty()) result else discovered.toMutableMap()
@@ -545,9 +578,12 @@ object SonosManager {
         // wifiNet. Without this, every subsequent SOAP call fails forever.
         val msg = result.second
         if (result.first == 500 && (msg.contains("EPERM") || msg.contains("Binding socket to network"))) {
-            logSoap("WARN: stale wifiNet binding (${msg.take(100)}); clearing and retrying without bind")
+            logSoap("WARN: stale wifiNet binding (${msg.take(100)}); clearing and retrying without bind [${speakerCtx(speaker)}]")
             wifiNet = null
             result = attemptSoap(url, body, serviceType, action, timeoutMs, null)
+        }
+        if (result.first == 200 && speaker.uuid.isNotEmpty()) {
+            lastSoapSuccessMs[speaker.uuid] = System.currentTimeMillis()
         }
         return result
     }
@@ -588,11 +624,11 @@ object SonosManager {
         val args = "<InstanceID>0</InstanceID><CurrentURI>$escUri</CurrentURI><CurrentURIMetaData>$metadata</CurrentURIMetaData>"
         logSoap("SetAVTransportURI: ${speaker.name} title=\"$title\" uri=${uri.take(80)}")
         val (status, data) = soap(speaker, speaker.controlUrl, AVT, "SetAVTransportURI", args)
-        logSoap("SetAVTransportURI result: status=$status" + if (status != 200) " body=${data.take(200)}" else "")
+        logSoap("SetAVTransportURI result: status=$status" + if (status != 200) " body=${data.take(800)} [${speakerCtx(speaker)}]" else "")
         if (status == 200) {
             logSoap("Play: ${speaker.name}")
             val (playStatus, playData) = soap(speaker, speaker.controlUrl, AVT, "Play", "<InstanceID>0</InstanceID><Speed>1</Speed>")
-            logSoap("Play result: status=$playStatus" + if (playStatus != 200) " body=${playData.take(200)}" else "")
+            logSoap("Play result: status=$playStatus" + if (playStatus != 200) " body=${playData.take(800)} [${speakerCtx(speaker)}]" else "")
         }
         return status == 200
     }
@@ -602,7 +638,7 @@ object SonosManager {
         if (action == "Play") args += "<Speed>1</Speed>"
         logSoap("$action: ${speaker.name}")
         val (status, data) = soap(speaker, speaker.controlUrl, AVT, action, args)
-        logSoap("$action result: status=$status" + if (status != 200) " body=${data.take(200)}" else "")
+        logSoap("$action result: status=$status" + if (status != 200) " body=${data.take(800)} [${speakerCtx(speaker)}]" else "")
         return status == 200
     }
 
@@ -611,7 +647,7 @@ object SonosManager {
         val args = "<InstanceID>0</InstanceID><Channel>Master</Channel><DesiredVolume>$vol</DesiredVolume>"
         logSoap("SetVolume: ${speaker.name} → $vol, url=http://${speaker.ip}:${speaker.port}${speaker.renderingUrl}")
         val (status, data) = soap(speaker, speaker.renderingUrl, RC, "SetVolume", args)
-        logSoap("SetVolume result: status=$status, response=${data.take(300)}")
+        logSoap("SetVolume result: status=$status" + if (status != 200) " body=${data.take(800)} [${speakerCtx(speaker)}]" else ", response=${data.take(300)}")
         return status == 200
     }
 
@@ -626,7 +662,7 @@ object SonosManager {
                 return vol
             }
         }
-        logSoap("GetVolume FAILED: ${speaker.name}, status=$status, data=${data.take(200)}")
+        logSoap("GetVolume FAILED: ${speaker.name}, status=$status, data=${data.take(800)} [${speakerCtx(speaker)}]")
         return 50
     }
 
@@ -646,7 +682,7 @@ object SonosManager {
                 return state
             }
         } else {
-            logSoap("GetTransportInfo FAILED: ${speaker.name} status=$status body=${data.take(200)}")
+            logSoap("GetTransportInfo FAILED: ${speaker.name} status=$status body=${data.take(800)} [${speakerCtx(speaker)}]")
         }
         return "UNKNOWN"
     }
@@ -670,6 +706,8 @@ object SonosManager {
                 val titleMatch = Pattern.compile("<dc:title>(.*?)</dc:title>").matcher(meta)
                 if (titleMatch.find()) info.put("track", titleMatch.group(1))
             }
+        } else {
+            logSoap("GetPositionInfo FAILED: ${speaker.name} status=$status body=${data.take(800)} [${speakerCtx(speaker)}]")
         }
         return info
     }
@@ -683,7 +721,7 @@ object SonosManager {
         val args = "<InstanceID>0</InstanceID><EQType>$eqType</EQType><DesiredValue>$value</DesiredValue>"
         logSoap("SetEQ: ${speaker.name} $eqType=$value")
         val (status, data) = soap(speaker, speaker.renderingUrl, RC, "SetEQ", args)
-        logSoap("SetEQ result: status=$status, response=${data.take(200)}")
+        logSoap("SetEQ result: status=$status" + if (status != 200) " body=${data.take(800)} [${speakerCtx(speaker)}]" else ", response=${data.take(200)}")
         return status == 200
     }
 
@@ -694,7 +732,7 @@ object SonosManager {
             val m = Pattern.compile("<CurrentValue>(-?\\d+)</CurrentValue>").matcher(data)
             if (m.find()) return m.group(1)!!.toInt()
         }
-        logSoap("GetEQ FAILED: ${speaker.name} $eqType, status=$status")
+        logSoap("GetEQ FAILED: ${speaker.name} $eqType, status=$status body=${data.take(800)} [${speakerCtx(speaker)}]")
         return 0
     }
 
@@ -702,7 +740,7 @@ object SonosManager {
         val args = "<InstanceID>0</InstanceID><Unit>REL_TIME</Unit><Target>$position</Target>"
         logSoap("Seek: ${speaker.name} to $position")
         val (status, data) = soap(speaker, speaker.controlUrl, AVT, "Seek", args)
-        logSoap("Seek result: status=$status" + if (status != 200) " body=${data.take(200)}" else "")
+        logSoap("Seek result: status=$status" + if (status != 200) " body=${data.take(800)} [${speakerCtx(speaker)}]" else "")
         return status == 200
     }
 

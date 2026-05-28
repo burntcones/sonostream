@@ -134,14 +134,28 @@ class ApiServer(
         // case the staff describes ("playback stopped, opening the app
         // resumes it"). Skip if last close was COMPLETE — long buffer
         // drains are normal there and last for the entire track length.
+        //
+        // v2.3.11 guard: only a zombie if NO /audio stream has delivered
+        // bytes since that PREMATURE_CLOSE. Sonos fires several short
+        // PREMATURE_CLOSEs while probing a fresh URI before settling into
+        // one long ranged stream that runs for minutes. Without this guard
+        // the check fired ~60s into that healthy ranged stream, advanced,
+        // which force-closed the stream (logging another PREMATURE_CLOSE)
+        // and armed the next false positive — a self-sustaining ~60s
+        // cascade that chewed through IOI's whole 30-track queue (the dump
+        // showed 46MB delivered in the 62s right before each "zombie"
+        // advance, proving the stream was alive). lastAudioActivityMs is
+        // bumped on every byte read, so newer-than-close == live stream.
+        val streamActiveSinceClose = lastAudioActivityMs > lastPrematureCloseMs
         if (state == "PLAYING" && lastPrematureCloseMs > 0L &&
             lastPrematureCloseMs > lastCompleteCloseMs &&
-            lastPrematureCloseMs != zombieAdvanceFiredForCloseMs) {
+            lastPrematureCloseMs != zombieAdvanceFiredForCloseMs &&
+            !streamActiveSinceClose) {
             val sinceClose = now - lastPrematureCloseMs
             if (sinceClose in 60_000L..180_000L) {
                 val currentFile = files.getOrNull(queueIndex)
                 if (currentFile != null) {
-                    AudioProcessor.log("Monitor: state=PLAYING ${sinceClose / 1000}s after PREMATURE_CLOSE — treating as zombie, advancing")
+                    AudioProcessor.log("Monitor: state=PLAYING ${sinceClose / 1000}s after PREMATURE_CLOSE, no stream activity since — treating as zombie, advancing")
                     zombieAdvanceFiredForCloseMs = lastPrematureCloseMs
                     autoAdvanceToNext(files, sp)
                     return
@@ -153,7 +167,14 @@ class ApiServer(
         if (prev != "PLAYING" || state != "STOPPED") return
 
         val naturalEnd = durSec > 0 && posSec >= durSec - 5
-        AudioProcessor.log("Monitor: state PLAYING->STOPPED, pos=${posSec}s dur=${durSec}s naturalEnd=$naturalEnd")
+        // v2.3.11: also log the TrackURI Sonos *thinks* it was playing.
+        // If this diverges from `currentFile`, we've hit a coordinator-shift
+        // case where SOAP went to one speaker but playback is owned by the
+        // other one in the group — drives hypothesis H2 from the v2.3.10
+        // root-cause investigation.
+        val sonosTrackUri = pos.optString("uri", "")
+        val expectedFileName = files.getOrNull(queueIndex)?.let { File(it).name } ?: "?"
+        AudioProcessor.log("Monitor: state PLAYING->STOPPED, pos=${posSec}s dur=${durSec}s naturalEnd=$naturalEnd expected=$expectedFileName sonosUri=${sonosTrackUri.take(120)}")
 
         val currentFile = files.getOrNull(queueIndex) ?: return
 
