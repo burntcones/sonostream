@@ -37,7 +37,7 @@ class RemoteCommandPoller(
     companion object {
         private const val TAG = "RemoteCommandPoller"
         // Set to the deployed Vercel relay URL (Task B7). Not a secret.
-        var relayBaseUrl = "https://sonostream-relay.vercel.app"
+        val relayBaseUrl = "https://sonostream-relay.vercel.app"
         private const val POLL_INTERVAL_MS = 90_000L
         private const val PREFS = "remote_log"
         private const val KEY_LAST = "last_handled_nonce"
@@ -87,25 +87,28 @@ class RemoteCommandPoller(
     }
 
     private fun fetchCmd(encDevice: String): String? {
+        var conn: java.net.HttpURLConnection? = null
         return try {
             val url = URL("$relayBaseUrl/api/cmd?device=$encDevice")
-            val conn = UpdateChecker.openConnection(url, context)
+            conn = UpdateChecker.openConnection(url, context)
             conn.connectTimeout = 8000
             conn.readTimeout = 8000
             conn.setRequestProperty("Cache-Control", "no-cache")
-            if (conn.responseCode != 200) { conn.disconnect(); return null }
-            val json = conn.inputStream.bufferedReader().readText()
-            conn.disconnect()
+            if (conn.responseCode != 200) return null
+            val json = conn.inputStream.bufferedReader().use { it.readText() }
             JSONObject(json).optString("requestId", "")
         } catch (e: Exception) {
             Log.w(TAG, "fetchCmd failed: ${e.message}"); null
+        } finally {
+            conn?.disconnect()
         }
     }
 
     private fun uploadLogs(encDevice: String, nonce: String, dump: String): Boolean {
+        var conn: java.net.HttpURLConnection? = null
         return try {
             val url = URL("$relayBaseUrl/api/logs?device=$encDevice")
-            val conn = UpdateChecker.openConnection(url, context)
+            conn = UpdateChecker.openConnection(url, context)
             conn.requestMethod = "POST"
             conn.connectTimeout = 8000
             conn.readTimeout = 15000
@@ -116,11 +119,11 @@ class RemoteCommandPoller(
                 put("dump", JSONObject(dump))
             }.toString()
             conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
-            val ok = conn.responseCode == 200
-            conn.disconnect()
-            ok
+            conn.responseCode == 200
         } catch (e: Exception) {
             Log.w(TAG, "uploadLogs failed: ${e.message}"); false
+        } finally {
+            conn?.disconnect()
         }
     }
 }
