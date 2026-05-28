@@ -104,6 +104,13 @@ object SonosManager {
      *  state CHANGES from the 2-second polling loop, not every poll. */
     private val lastTransportState = ConcurrentHashMap<String, String>()
 
+    /** Last observed volume per speaker. Same rationale as lastTransportState:
+     *  the UI polls GetVolume every 2s, and logging every hit floods the 200-
+     *  entry ring buffer so the actual failure events (Play/Pause/SetURI/state
+     *  changes) get evicted within ~6 min. v2.3.12: log GetVolume only on
+     *  change — this is what made the IOI silent-stop dumps un-diagnosable. */
+    private val lastVolume = ConcurrentHashMap<String, Int>()
+
     /** Last successful SOAP call per speaker (keyed by UUID, which is stable
      *  across name/IP changes). Used by speakerCtx() to annotate failure logs
      *  with "how long since this speaker last responded successfully" so we
@@ -658,7 +665,12 @@ object SonosManager {
             val m = Pattern.compile("<CurrentVolume>(\\d+)</CurrentVolume>").matcher(data)
             if (m.find()) {
                 val vol = m.group(1)!!.toInt()
-                logSoap("GetVolume: ${speaker.name} = $vol")
+                // Log only on change (see lastVolume rationale) so polling
+                // doesn't evict the meaningful SOAP history.
+                if (lastVolume[speaker.name] != vol) {
+                    logSoap("GetVolume: ${speaker.name} = $vol")
+                    lastVolume[speaker.name] = vol
+                }
                 return vol
             }
         }

@@ -49,6 +49,14 @@ class ApiServer(
     @Volatile private var lastPrematureCloseMs: Long = 0L
     @Volatile private var lastCompleteCloseMs: Long = 0L
     @Volatile private var zombieAdvanceFiredForCloseMs: Long = 0L
+    // v2.3.12 diagnostics: when the most recent /audio GET started. If this is
+    // newer than every close, at least one audio stream is open. Combined with
+    // lastAudioActivityMs (last byte read) this lets the monitor heartbeat
+    // distinguish "Sonos holding an idle TCP stream open while PLAYING"
+    // (suspected silent-zombie — falls through all 3 recovery paths because no
+    // close/STOPPED/pos>0 fires) from a healthy stream still pulling bytes.
+    @Volatile private var lastAudioGetMs: Long = 0L
+    @Volatile private var lastHeartbeatMs: Long = 0L
 
     init {
         LocalPlayer.init(context)
@@ -98,6 +106,27 @@ class ApiServer(
         val pos = SonosManager.getPositionInfo(sp)
         val posSec = timeStrToSec(pos.optString("position", "0:00:00"))
         val durSec = timeStrToSec(pos.optString("duration", "0:00:00"))
+
+        // ── Health heartbeat (v2.3.12 diagnostic, no recovery) ────────
+        // Once per 60s while a queue is active, snapshot the signals that
+        // would expose a silent-zombie (Sonos says PLAYING but no sound). The
+        // tell is activityAge climbing without bound while state stays PLAYING
+        // and a stream is open — none of the 3 recovery paths catch that, so
+        // we need it in the dump before deciding whether/how to recover.
+        // streamOpen = the last /audio GET is newer than the last close.
+        if (now - lastHeartbeatMs >= 60_000L) {
+            lastHeartbeatMs = now
+            val lastClose = maxOf(lastPrematureCloseMs, lastCompleteCloseMs)
+            val streamOpen = lastAudioGetMs > lastClose
+            val activityAge = if (lastAudioActivityMs > 0L) "${(now - lastAudioActivityMs) / 1000}s" else "never"
+            val closeAge = if (lastClose > 0L) "${(now - lastClose) / 1000}s" else "never"
+            val closeType = when {
+                lastCompleteCloseMs > lastPrematureCloseMs -> "COMPLETE"
+                lastPrematureCloseMs > 0L -> "PREMATURE"
+                else -> "none"
+            }
+            AudioProcessor.log("Monitor heartbeat: state=$state pos=${posSec}s/${durSec}s idx=${queueIndex}/${files.size} streamOpen=$streamOpen activityAge=$activityAge lastClose=$closeType@$closeAge")
+        }
 
         // ── Position-stagnation path ──────────────────────────────────
         // State is PLAYING but position hasn't advanced in >30s → Sonos is
@@ -749,6 +778,7 @@ class ApiServer(
         val rangeHeader = session.headers["range"]
         val clientIp = session.headers["http-client-ip"] ?: session.headers["remote-addr"] ?: "?"
 
+        lastAudioGetMs = System.currentTimeMillis()
         AudioProcessor.log("/audio GET: ${file.name} (${file.length()}b) eqActive=$eqActive range=${rangeHeader ?: "-"} client=$clientIp")
 
         if (eqActive) {

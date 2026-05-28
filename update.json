@@ -1,6 +1,6 @@
 {
-  "versionCode": 33,
-  "versionName": "2.3.11",
-  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v2.3.11/aux.apk",
-  "releaseNotes": "Fix playback skipping through the queue: the recovery check could mistake a healthy stream for a stalled one and keep auto-advancing every ~60 seconds. It now checks whether audio is still flowing before advancing, so music plays through cleanly."
+  "versionCode": 34,
+  "versionName": "2.3.12",
+  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v2.3.12/aux.apk",
+  "releaseNotes": "Diagnostics for the intermittent silent-stop at IOI: keep a longer, cleaner event log (volume polls no longer flood it) and record a health heartbeat so the next report pinpoints why audio stops while the app still shows playing. No playback behaviour changes."
 }

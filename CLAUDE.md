@@ -34,8 +34,9 @@ Multiple layered recovery handlers, all firing from the `PlaybackMonitor` in `Ap
 | User-tapped Play returns 200 but Sonos stays PAUSED/STOPPED | Re-issue Play once after 5 s. Only fires within 5 s of an explicit `/api/control Play` so it can't undo a deliberate pause. | v2.3.9 |
 | Stale `wifiNet` Network handle (`Binding socket to network N failed: EPERM`) | Detect EPERM in SOAP fault body, clear `wifiNet`, retry once via default route. Next discovery repopulates with a fresh handle. | v2.3.6 |
 | Auto-advance fires but Sonos doesn't actually start playing | Open follow-up — instrument the post-advance state and ladder up if it ever shows in a dump. | (open) |
+| **Silent zombie**: Sonos reports `PLAYING`, holds the audio TCP stream open but stops reading bytes, position stuck at 0, no sound | **No recovery yet — under investigation.** Falls through all three paths above: (1) never transitions to `STOPPED`, (2) position-stagnation is gated on `pos>0` but these long mixes report `pos=0`, (3) the PREMATURE_CLOSE zombie check needs a stream *close* that never fires when Sonos holds the socket open idle. The v2.3.11 IOI dump strongly implied this (staff rapidly tapping tracks/pause/play = "no sound, trying to fix") but couldn't confirm it. v2.3.12 adds a `Monitor heartbeat` line (once/60s while a queue is active) logging `state / pos / streamOpen / activityAge / lastClose` — a climbing `activityAge` while `state=PLAYING streamOpen=true` is the signature. Decide on recovery (gentle Play re-issue, not advance — advancing caused the v2.3.11 cascade) once a dump confirms it. | v2.3.12 (instrument) |
 
-Diagnostic logs from any of these appear in the `eq_log` array of `/api/debug` with `Monitor:` or `Play verify:` prefixes.
+Diagnostic logs from any of these appear in the `eq_log` array of `/api/debug` with `Monitor:` or `Play verify:` prefixes. **Note (v2.3.12):** `GetVolume` now logs only on change (was every 2 s poll) — the constant spam previously evicted the meaningful SOAP events from the 200-entry ring buffer within ~6 min, which is why the IOI silent-stop dumps never reached back to the actual failure.
 
 ## Key Discoveries (Current Architecture)
 
@@ -89,7 +90,7 @@ export ANDROID_HOME="$HOME/Library/Android/sdk"
 - Repo: github.com/burntcones/sonostream (public)
 - `gh` CLI is authenticated as `burntcones`
 - OTA manifest: `update.json` in repo root (raw URL: `https://raw.githubusercontent.com/burntcones/sonostream/main/update.json`)
-- Current version: versionCode 33, versionName 2.3.11
+- Current version: versionCode 34, versionName 2.3.12
 
 ## OTA Update Workflow
 1. Bump `versionCode` and `versionName` in `app/build.gradle`
