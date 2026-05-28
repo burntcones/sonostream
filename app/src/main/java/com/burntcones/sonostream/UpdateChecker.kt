@@ -46,7 +46,7 @@ object UpdateChecker {
      * This bypasses bindProcessToNetwork(wifiNetwork) which routes all traffic
      * over a local WiFi network that may have no internet.
      */
-    private fun findInternetNetwork(context: Context?): android.net.Network? {
+    internal fun findInternetNetwork(context: Context?): android.net.Network? {
         if (context == null) return null
         return try {
             val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
@@ -66,7 +66,7 @@ object UpdateChecker {
      * Uses a validated internet network (cellular) if available, otherwise
      * falls back to the default (process-bound) connection.
      */
-    private fun openConnection(url: URL, context: Context?): HttpURLConnection {
+    internal fun openConnection(url: URL, context: Context?): HttpURLConnection {
         val internetNet = findInternetNetwork(context)
         return if (internetNet != null) {
             Log.d(TAG, "Using internet network (bypassing WiFi binding) for: $url")
