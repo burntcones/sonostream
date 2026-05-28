@@ -314,6 +314,31 @@ class ApiServer(
         return "${ip and 0xff}.${ip shr 8 and 0xff}.${ip shr 16 and 0xff}.${ip shr 24 and 0xff}"
     }
 
+    /** Build the diagnostics payload served at GET /api/debug. Public so the
+     *  remote-log poller can grab the same dump in-process (no loopback HTTP). */
+    fun debugJson(): JSONObject = JSONObject().apply {
+        put("diagnostics", SonosManager.lastDiagnostics)
+        put("speaker_count", SonosManager.speakers.size)
+        put("local_ip", getLocalIp())
+        put("speakers", org.json.JSONArray().apply {
+            SonosManager.speakers.forEach { (name, sp) ->
+                put(JSONObject().apply {
+                    put("name", name)
+                    put("ip", sp.ip)
+                    put("port", sp.port)
+                    put("controlUrl", sp.controlUrl)
+                    put("renderingUrl", sp.renderingUrl)
+                    put("uuid", sp.uuid)
+                })
+            }
+        })
+        put("soap_logs", org.json.JSONArray(SonosManager.getSoapLogs()))
+        put("eq_log", org.json.JSONArray(AudioProcessor.getLog()))
+        put("eq_active", !eq.bypass)
+        put("eq_bands", eq.getBands().size)
+        put("eq_version", eq.version)
+    }
+
     override fun serve(session: IHTTPSession): Response {
         val uri = session.uri ?: "/"
         val method = session.method
@@ -340,30 +365,7 @@ class ApiServer(
                     })
                 }
 
-                method == Method.GET && uri == "/api/debug" -> {
-                    jsonResponse(JSONObject().apply {
-                        put("diagnostics", SonosManager.lastDiagnostics)
-                        put("speaker_count", SonosManager.speakers.size)
-                        put("local_ip", getLocalIp())
-                        put("speakers", org.json.JSONArray().apply {
-                            SonosManager.speakers.forEach { (name, sp) ->
-                                put(JSONObject().apply {
-                                    put("name", name)
-                                    put("ip", sp.ip)
-                                    put("port", sp.port)
-                                    put("controlUrl", sp.controlUrl)
-                                    put("renderingUrl", sp.renderingUrl)
-                                    put("uuid", sp.uuid)
-                                })
-                            }
-                        })
-                        put("soap_logs", org.json.JSONArray(SonosManager.getSoapLogs()))
-                        put("eq_log", org.json.JSONArray(AudioProcessor.getLog()))
-                        put("eq_active", !eq.bypass)
-                        put("eq_bands", eq.getBands().size)
-                        put("eq_version", eq.version)
-                    })
-                }
+                method == Method.GET && uri == "/api/debug" -> jsonResponse(debugJson())
 
                 method == Method.GET && uri == "/api/version" -> {
                     val pInfo = context.packageManager.getPackageInfo(context.packageName, 0)
