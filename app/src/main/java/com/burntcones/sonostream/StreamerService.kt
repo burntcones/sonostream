@@ -19,6 +19,7 @@ import androidx.media.session.MediaButtonReceiver
 class StreamerService : Service() {
 
     private var apiServer: ApiServer? = null
+    private var logPoller: RemoteCommandPoller? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
     private var mediaSession: MediaSessionCompat? = null
@@ -77,6 +78,21 @@ class StreamerService : Service() {
             apiServer?.start()
         } catch (e: Exception) {
             e.printStackTrace()
+        }
+
+        // Start the on-demand remote-log poller (best-effort; never blocks audio)
+        apiServer?.let { srv ->
+            logPoller = RemoteCommandPoller(
+                applicationContext,
+                dumpProvider = { srv.debugJson().toString() },
+                deviceKeyProvider = {
+                    val rooms = SonosManager.speakers.values.map { it.name }
+                    val androidId = android.provider.Settings.Secure.getString(
+                        contentResolver, android.provider.Settings.Secure.ANDROID_ID
+                    ) ?: ""
+                    RemoteLog.deviceKey(rooms, androidId)
+                },
+            ).also { it.start() }
         }
     }
 
@@ -294,6 +310,7 @@ class StreamerService : Service() {
     }
 
     override fun onDestroy() {
+        logPoller?.stop()
         instance = null
         apiServer?.stop()
         mediaSession?.apply {
