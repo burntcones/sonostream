@@ -127,10 +127,12 @@ curl "https://<project>.vercel.app/api/logs?device=IOI" -H "x-admin-token: $AUX_
   URL-encode before use. Deterministic for multi-speaker tablets (sorted + first).
 - **Upload decision** (pure, unit-testable): `shouldUpload(fetchedNonce, lastHandled) =
   fetchedNonce.isNotEmpty() && fetchedNonce != lastHandled`.
-- **Dump source:** GET the local `http://127.0.0.1:8077/api/debug` over loopback (the
-  server is already running) to reuse the exact dump the panel/Share produce. Loopback
-  needs the default network, not the internet network — keep the two connections
-  distinct.
+- **Dump source:** in-process. Refactor `ApiServer`'s `/api/debug` handler to build its
+  JSON in a public `debugJson(): JSONObject`; both the route and the poller call it.
+  Avoids a loopback HTTP hop (a `StreamerService` comment notes loopback was unreliable
+  under the former process-wide network binding) and reuses the exact dump the panel/
+  Share produce. `StreamerService` passes the poller a `() -> String` backed by
+  `apiServer.debugJson().toString()`.
 - **Dedupe state:** `lastHandledRequestId` in SharedPreferences. Set **only** after the
   upload POST returns 200, so a failed upload retries on the next poll. Belt-and-
   suspenders with the relay clearing the nonce on success.
