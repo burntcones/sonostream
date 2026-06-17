@@ -55,6 +55,11 @@ The EQ decode path produces a WAV stream of unknown exact size (MediaCodec outpu
 ### Debug Panel Long-Press (v2.3.5)
 Long-press the Aux logo for 800 ms (was 1500 ms). Uses pointer events instead of `touchstart/touchend` because Android WebView's `touchcancel` fires aggressively when the browser starts treating a hold as scroll, silently killing the timer. **Backup**: 5 taps within 3 s also opens the panel for tablets where long-press is blocked. Panel has Refresh / Check Updates / Share / Close buttons. Share opens the Android share sheet via the `NativeShare` JavaScript bridge with the full debug log pre-filled.
 
+### Remote Log Pull (v2.3.13)
+On-demand way to collect a cafe's `/api/debug` dump without being on the cafe WiFi — the tablet is behind NAT so it can't be pulled, it *pushes*. `RemoteCommandPoller` (started by `StreamerService`, runs under the service wake lock) polls a tiny Vercel relay's `GET /api/cmd?device=<key>` every ~90 s over the internet-capable network (reuses `UpdateChecker.openConnection`/`findInternetNetwork`). When the relay returns a fresh nonce, the poller builds the dump in-process via `ApiServer.debugJson()` (no loopback HTTP) and POSTs `{requestId, dump}` to `/api/logs`; it records the handled nonce in SharedPreferences only after a 200 (retry-safe). **Device key** = first discovered Sonos room name (e.g. `IOI`), falling back to `tablet-<android_id_prefix>` — `RemoteLog.deviceKey`. Best-effort and fully isolated from the audio/Sonos path (every call try/caught; failures just retry next poll).
+
+Relay lives in a separate repo (`github.com/burntcones/sonostream-relay`), deployed to Vercel (`https://sonostream-relay.vercel.app`, KV-backed via `@vercel/kv` over Upstash Redis, region sin1). **No secret in the public APK** — the relay base URL is just a URL; the single `ADMIN_TOKEN` (gates setting the flag + reading dumps) lives only in Vercel env + the dev's shell. The public surfaces leak nothing: `GET /api/cmd` returns only a random nonce, `POST /api/logs` requires the current single-use nonce. To pull logs: `curl -X POST "$BASE/api/cmd?device=IOI" -H "x-admin-token: $AUX_ADMIN"`, wait ~90 s, then `curl "$BASE/api/logs?device=IOI" -H "x-admin-token: $AUX_ADMIN" | jq .dump`.
+
 ## Key Discoveries (Historical, v1.x)
 
 ### EQ Inactive Path (v2.0.1)
@@ -90,7 +95,7 @@ export ANDROID_HOME="$HOME/Library/Android/sdk"
 - Repo: github.com/burntcones/sonostream (public)
 - `gh` CLI is authenticated as `burntcones`
 - OTA manifest: `update.json` in repo root (raw URL: `https://raw.githubusercontent.com/burntcones/sonostream/main/update.json`)
-- Current version: versionCode 34, versionName 2.3.12
+- Current version: versionCode 35, versionName 2.3.13
 
 ## OTA Update Workflow
 1. Bump `versionCode` and `versionName` in `app/build.gradle`
@@ -129,7 +134,8 @@ curl http://<tablet-ip>:8077/api/debug > aux-debug.json
 | `ApiServer.kt` | NanoHTTPD routes, server-side playback queue, `PlaybackMonitor` thread (state polling + layered recovery), `CountingInputStream` for audio-event tracking |
 | `SonosManager.kt` | SSDP discovery via `MulticastSocket`, subnet scan, ZoneGroupTopology groups, UPnP SOAP control with per-socket WiFi binding + EPERM recovery, SOAP log ring buffer (200), `lastTransportState` for change-only logging |
 | `LocalPlayer.kt` | AudioTrack + MediaCodec decode with live EQ for BT/built-in audio |
-| `UpdateChecker.kt` | Fetches update.json from GitHub via internet-capable network, downloads APK, triggers install |
+| `UpdateChecker.kt` | Fetches update.json from GitHub via internet-capable network, downloads APK, triggers install. Network helpers (`openConnection`/`findInternetNetwork`) are `internal` so `RemoteCommandPoller` reuses them |
+| `RemoteCommandPoller.kt` | On-demand remote log pull: polls Vercel relay `/api/cmd` every ~90 s, pushes `ApiServer.debugJson()` dump to `/api/logs` when a nonce is set. `RemoteLog` holds pure helpers (`deviceKey`, `shouldUpload`). Started/stopped by `StreamerService`. No secret in APK |
 | `BiquadFilter.kt` | Single biquad IIR filter section — RBJ cookbook formulas, 5 filter types, frequency response calc |
 | `ParametricEQ.kt` | N-band parametric EQ manager — band CRUD, cascade processing, JSON serialization, SharedPreferences persistence |
 | `AudioProcessor.kt` | Streaming audio processor: MediaCodec decode → EQ biquad chain → WAV stream via PipedOutputStream + chunked HTTP. `MediaMetadataRetriever`-based duration probe. Audio event log ring buffer (200) shared with `ApiServer.serveAudio` |
