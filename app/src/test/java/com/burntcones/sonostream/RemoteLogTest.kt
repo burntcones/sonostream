@@ -27,4 +27,17 @@ class RemoteLogTest {
         assertFalse(RemoteLog.shouldUpload("", "n1"))   // no request pending
         assertFalse(RemoteLog.shouldUpload("", null))
     }
+
+    @Test fun shouldSnapshot_firesWhenNeverSent() {
+        assertTrue(RemoteLog.shouldSnapshot(1000L, 0L, 900_000L))
+    }
+
+    @Test fun shouldSnapshot_skipsWithinInterval() {
+        assertFalse(RemoteLog.shouldSnapshot(1000L, 900L, 900_000L)) // 100ms since last
+    }
+
+    @Test fun shouldSnapshot_firesAtOrPastInterval() {
+        assertTrue(RemoteLog.shouldSnapshot(900_001L, 1L, 900_000L)) // exactly interval elapsed
+        assertTrue(RemoteLog.shouldSnapshot(1_900_001L, 1_000_000L, 900_000L)) // >interval
+    }
 }

@@ -19,6 +19,11 @@ object RemoteLog {
      *  already handled. */
     fun shouldUpload(fetchedNonce: String, lastHandled: String?): Boolean =
         fetchedNonce.isNotEmpty() && fetchedNonce != lastHandled
+
+    /** Fire a periodic snapshot if we've never sent one, or the interval has
+     *  elapsed since the last successful snapshot. */
+    fun shouldSnapshot(nowMs: Long, lastSnapshotMs: Long, intervalMs: Long): Boolean =
+        lastSnapshotMs == 0L || nowMs - lastSnapshotMs >= intervalMs
 }
 
 /**
