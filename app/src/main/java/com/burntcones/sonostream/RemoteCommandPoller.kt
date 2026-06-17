@@ -44,11 +44,13 @@ class RemoteCommandPoller(
         // Set to the deployed Vercel relay URL (Task B7). Not a secret.
         val relayBaseUrl = "https://sonostream-relay.vercel.app"
         private const val POLL_INTERVAL_MS = 90_000L
+        private const val SNAPSHOT_INTERVAL_MS = 15 * 60 * 1000L
         private const val PREFS = "remote_log"
         private const val KEY_LAST = "last_handled_nonce"
     }
 
     @Volatile private var running = false
+    @Volatile private var lastSnapshotMs: Long = 0L
     private var thread: Thread? = null
 
     fun start() {
@@ -78,6 +80,7 @@ class RemoteCommandPoller(
         val device = try { deviceKeyProvider() } catch (_: Exception) { return }
         if (device.isBlank()) return
         val encDevice = java.net.URLEncoder.encode(device, "UTF-8")
+        maybePostSnapshot(encDevice)
         val nonce = fetchCmd(encDevice) ?: return
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val last = prefs.getString(KEY_LAST, null)
@@ -88,6 +91,38 @@ class RemoteCommandPoller(
         if (uploadLogs(encDevice, nonce, dump)) {
             prefs.edit().putString(KEY_LAST, nonce).apply()
             Log.d(TAG, "uploaded dump for $device")
+        }
+    }
+
+    private fun maybePostSnapshot(encDevice: String) {
+        val now = System.currentTimeMillis()
+        if (!RemoteLog.shouldSnapshot(now, lastSnapshotMs, SNAPSHOT_INTERVAL_MS)) return
+        val dump = try { dumpProvider() } catch (e: Exception) {
+            Log.w(TAG, "snapshot dump failed: ${e.message}"); return
+        }
+        if (postSnapshot(encDevice, dump)) {
+            lastSnapshotMs = now
+            Log.d(TAG, "posted snapshot")
+        }
+    }
+
+    private fun postSnapshot(encDevice: String, dump: String): Boolean {
+        var conn: java.net.HttpURLConnection? = null
+        return try {
+            val url = URL("$relayBaseUrl/api/snapshot?device=$encDevice")
+            conn = UpdateChecker.openConnection(url, context)
+            conn.requestMethod = "POST"
+            conn.connectTimeout = 8000
+            conn.readTimeout = 15000
+            conn.doOutput = true
+            conn.setRequestProperty("Content-Type", "application/json")
+            val body = JSONObject().apply { put("dump", JSONObject(dump)) }.toString()
+            conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+            conn.responseCode == 200
+        } catch (e: Exception) {
+            Log.w(TAG, "postSnapshot failed: ${e.message}"); false
+        } finally {
+            conn?.disconnect()
         }
     }
 
