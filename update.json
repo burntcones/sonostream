@@ -1,6 +1,6 @@
 {
-  "versionCode": 35,
-  "versionName": "2.3.13",
-  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v2.3.13/aux.apk",
-  "releaseNotes": "Remote log pull: debug logs can now be collected from a cafe without being on-site. No playback behaviour changes."
+  "versionCode": 36,
+  "versionName": "2.3.14",
+  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v2.3.14/aux.apk",
+  "releaseNotes": "Periodic safety-net: the tablet now uploads a diagnostics snapshot every ~15 minutes so a playback stop can be reviewed even if it wasn't reported in the moment. No playback behaviour changes."
 }

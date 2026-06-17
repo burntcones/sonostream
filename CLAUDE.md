@@ -95,7 +95,7 @@ export ANDROID_HOME="$HOME/Library/Android/sdk"
 - Repo: github.com/burntcones/sonostream (public)
 - `gh` CLI is authenticated as `burntcones`
 - OTA manifest: `update.json` in repo root (raw URL: `https://raw.githubusercontent.com/burntcones/sonostream/main/update.json`)
-- Current version: versionCode 35, versionName 2.3.13
+- Current version: versionCode 36, versionName 2.3.14
 
 ## OTA Update Workflow
 1. Bump `versionCode` and `versionName` in `app/build.gradle`
@@ -135,7 +135,7 @@ curl http://<tablet-ip>:8077/api/debug > aux-debug.json
 | `SonosManager.kt` | SSDP discovery via `MulticastSocket`, subnet scan, ZoneGroupTopology groups, UPnP SOAP control with per-socket WiFi binding + EPERM recovery, SOAP log ring buffer (200), `lastTransportState` for change-only logging |
 | `LocalPlayer.kt` | AudioTrack + MediaCodec decode with live EQ for BT/built-in audio |
 | `UpdateChecker.kt` | Fetches update.json from GitHub via internet-capable network, downloads APK, triggers install. Network helpers (`openConnection`/`findInternetNetwork`) are `internal` so `RemoteCommandPoller` reuses them |
-| `RemoteCommandPoller.kt` | On-demand remote log pull: polls Vercel relay `/api/cmd` every ~90 s, pushes `ApiServer.debugJson()` dump to `/api/logs` when a nonce is set. `RemoteLog` holds pure helpers (`deviceKey`, `shouldUpload`). Started/stopped by `StreamerService`. No secret in APK |
+| `RemoteCommandPoller.kt` | On-demand remote log pull: polls Vercel relay `/api/cmd` every ~90 s, pushes `ApiServer.debugJson()` dump to `/api/logs` when a nonce is set. Also auto-pushes a snapshot to `/api/snapshot` every ~15 min (v2.3.14 safety-net). `RemoteLog` holds pure helpers (`deviceKey`, `shouldUpload`, `shouldSnapshot`). Started/stopped by `StreamerService`. No secret in APK |
 | `BiquadFilter.kt` | Single biquad IIR filter section — RBJ cookbook formulas, 5 filter types, frequency response calc |
 | `ParametricEQ.kt` | N-band parametric EQ manager — band CRUD, cascade processing, JSON serialization, SharedPreferences persistence |
 | `AudioProcessor.kt` | Streaming audio processor: MediaCodec decode → EQ biquad chain → WAV stream via PipedOutputStream + chunked HTTP. `MediaMetadataRetriever`-based duration probe. Audio event log ring buffer (200) shared with `ApiServer.serveAudio` |
