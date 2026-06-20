@@ -1,6 +1,6 @@
 {
-  "versionCode": 37,
-  "versionName": "2.3.15",
-  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v2.3.15/aux.apk",
-  "releaseNotes": "When a long track is interrupted, the player now skips to a genuinely different track instead of restarting the same one — so playback no longer loops the start of a mix. Diagnostics unchanged."
+  "versionCode": 38,
+  "versionName": "2.3.16",
+  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v2.3.16/aux.apk",
+  "releaseNotes": "Adds restart diagnostics: logs each app start and how long it was gone, so we can measure how often Android is shutting the app down (a likely cause of brief playback gaps). No playback behaviour changes."
 }

@@ -57,6 +57,9 @@ class ApiServer(
     // close/STOPPED/pos>0 fires) from a healthy stream still pulling bytes.
     @Volatile private var lastAudioGetMs: Long = 0L
     @Volatile private var lastHeartbeatMs: Long = 0L
+    // v2.3.16: persist a "process alive" timestamp every ~10s so a relaunched
+    // process can log how long it was gone (the silence gap from an OS kill).
+    @Volatile private var lastAliveWriteMs: Long = 0L
 
     init {
         LocalPlayer.init(context)
@@ -72,6 +75,7 @@ class ApiServer(
             while (monitorRunning && !Thread.currentThread().isInterrupted) {
                 try {
                     Thread.sleep(3000)
+                    recordAlive()
                     checkPlaybackForAutoAdvance()
                 } catch (e: InterruptedException) {
                     break
@@ -83,6 +87,18 @@ class ApiServer(
             isDaemon = true
             start()
         }
+    }
+
+    /** Record that this process is alive (throttled to ~10s). Read back by
+     *  StreamerService on the next launch to compute the restart downtime. */
+    private fun recordAlive() {
+        val now = System.currentTimeMillis()
+        if (now - lastAliveWriteMs < 10_000L) return
+        lastAliveWriteMs = now
+        try {
+            context.getSharedPreferences(Diagnostics.PREFS, Context.MODE_PRIVATE)
+                .edit().putLong(Diagnostics.KEY_LAST_ALIVE, now).apply()
+        } catch (_: Exception) { /* best-effort */ }
     }
 
     // Position-stagnation tracking: detect "Sonos reports PLAYING but the
@@ -222,16 +238,24 @@ class ApiServer(
         autoAdvanceToNext(files, sp)
     }
 
-    /** Advance the queue index and start playing the next file on [sp]. */
+    /** Advance the queue index and start playing the next file on [sp].
+     *  Skips consecutive duplicates of the just-stopped file (the queue arrives
+     *  with each track doubled) so a repeatedly-stopping long mix advances to a
+     *  genuinely different track instead of restarting itself from byte 0. */
     private fun autoAdvanceToNext(files: List<String>, sp: SonosSpeaker) {
-        if (queueIndex + 1 >= files.size) {
+        val next = PlaybackQueue.nextDistinctIndex(files, queueIndex)
+        if (next >= files.size) {
             AudioProcessor.log("Monitor: end of queue (${queueIndex + 1}/${files.size}), stopping auto-advance")
             queueFiles = emptyList()
             return
         }
-        queueIndex++
+        val skipped = next - queueIndex - 1
+        queueIndex = next
         val nextFile = files[queueIndex]
-        AudioProcessor.log("Monitor: auto-advance ${queueIndex}/${files.size} -> ${File(nextFile).name}")
+        AudioProcessor.log(
+            "Monitor: auto-advance ${queueIndex}/${files.size} -> ${File(nextFile).name}" +
+                if (skipped > 0) " (skipped $skipped duplicate(s))" else ""
+        )
         playTrackOnSonos(nextFile, sp)
     }
 

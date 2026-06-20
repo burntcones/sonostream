@@ -38,6 +38,20 @@ class StreamerService : Service() {
         super.onCreate()
         instance = this
 
+        // v2.3.16: log this process start + how long the previous process was
+        // gone, so the relay snapshots show the restart frequency and the
+        // silence gap (Android keeps killing this foreground service). Read the
+        // previous "alive" stamp BEFORE the monitor starts overwriting it.
+        try {
+            val prevAlive = getSharedPreferences(Diagnostics.PREFS, MODE_PRIVATE)
+                .getLong(Diagnostics.KEY_LAST_ALIVE, 0L)
+            val version = packageManager.getPackageInfo(packageName, 0).versionName ?: "?"
+            val uptime = android.os.SystemClock.elapsedRealtime() - android.os.Process.getStartElapsedRealtime()
+            AudioProcessor.log(Diagnostics.startupLine(version, uptime, prevAlive, System.currentTimeMillis()))
+        } catch (e: Exception) {
+            Log.w(TAG, "startup log failed: ${e.message}")
+        }
+
         // Wipe any zombie process-wide network binding from an earlier lifecycle.
         // When onTaskRemoved stopped the service but Android kept the process
         // alive, a previous call to bindProcessToNetwork could still be active
