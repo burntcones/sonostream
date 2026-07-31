@@ -1,6 +1,6 @@
 {
-  "versionCode": 39,
-  "versionName": "2.3.17",
-  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v2.3.17/aux.apk",
-  "releaseNotes": "Fixes \"Speaker could not play this file\" on stereo-paired speakers (e.g. two Era 100s as one room). The app was sending playback to the paired speaker's second unit, which always refuses it. It now correctly targets the main speaker of the pair."
+  "versionCode": 40,
+  "versionName": "2.3.18",
+  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v2.3.18/aux.apk",
+  "releaseNotes": "Redesigned player: a proper volume knob, an Up Next list so you can see what's coming, and track lengths instead of file sizes (long mixes are flagged). The app now remembers your speaker, so it's ready to play the moment it opens."
 }

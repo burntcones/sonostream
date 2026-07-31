@@ -52,6 +52,16 @@ The EQ decode path produces a WAV stream of unknown exact size (MediaCodec outpu
 ### File Area Layout (v2.3.1)
 `.file-area` is a flex column owning `.file-toolbar` (search + sort, fixed) above `.file-list-scroll` (the actual scroller, holds `#fileList`). Folder headers use `position: sticky; top: 0` inside `.file-list-scroll`. Toolbar is OUTSIDE the scroll container, so there's no sticky-positioning gap for ghosted scrolled-past content to bleed through (the v2.3.1 fix). In tablet mode (≥768px) `.file-area` has explicit `height: calc(100vh - 120px)` to anchor the flex-wrap row, plus a 6px drag-handle `.resizer` between file area and player bar that resizes `.player-bar` width 280–720px (persisted to `localStorage.playerBarWidth`).
 
+### Console Redesign (v2.3.18)
+The UI is styled as audio hardware: machined dark panel, **white** illumination (single accent), neumorphic depth (paired light/dark shadows via `--nl`/`--nd`). Key move during the port: `--accent` kept its *name* but changed value from orange `#ff6b2b` to white `#f7f9f4`, so every existing rule lit up in one edit — with `--on-accent` added for text/icons sitting on the illumination (four rules were white-on-white until fixed).
+
+- **Volume knob replaces the slider.** `.vol-dial` keeps the exact contract the polling code expects of the old slider — a `[data-speaker]` element with a settable `.value` (via `Object.defineProperty`) and an `_interacting()` guard — so `fetchStatus()` needed no changes. Drag engages only after 4 px of movement so brushing the tablet can't change volume; the face brightens with level.
+- **Up Next** (`renderUpNext`) shows the next 3 *distinct* queued tracks, mirroring the server's `PlaybackQueue.nextDistinctIndex` so what staff see is what will actually play.
+- **Track durations replace file size** — `MediaStore.Audio.Media.DURATION` added to `scanAudioFiles` (via `getColumnIndex`, not `…OrThrow`: absent on some OEM builds) surfaced as `duration_ms`. Multi-hour mixes get an hour badge, flagging exactly the files Sonos abandons. The "Size" sort chip became "Length".
+- **Fonts are bundled, not fetched.** Archivo (variable, 34 KB) + IBM Plex Mono (14 KB) live in `assets/fonts/` and are served by a new `GET /fonts/<name>.woff2` route. Previously the UI loaded DM Sans from Google Fonts and **silently fell back to Roboto on cafe WiFi with no internet** — broken for a long time, invisible.
+- **EQ canvas restyled** to a glowing white response curve on a sunken well. Fixed a latent bug: `eqCtx.strokeStyle = 'var(--accent)'` — canvas does **not** resolve CSS variables, so the composite curve had never taken the accent colour. Band colours went from a rainbow to a monochrome brightness ramp.
+- **Speaker is remembered** across launches (`localStorage` `auxSelectedSpeakers`, restored in `restoreSpeakerChoice`). Note `init()` boots via `rescanSpeakers()`, **not** `loadSpeakers()` — restore must be wired into both or it silently never runs. This matters because Android kills the service ~9×/day; staff previously landed on "Select Speaker…" each time. `togglePlay()` now opens the picker instead of returning silently.
+
 ### Debug Panel Long-Press (v2.3.5)
 Long-press the Aux logo for 800 ms (was 1500 ms). Uses pointer events instead of `touchstart/touchend` because Android WebView's `touchcancel` fires aggressively when the browser starts treating a hold as scroll, silently killing the timer. **Backup**: 5 taps within 3 s also opens the panel for tablets where long-press is blocked. Panel has Refresh / Check Updates / Share / Close buttons. Share opens the Android share sheet via the `NativeShare` JavaScript bridge with the full debug log pre-filled.
 
@@ -95,7 +105,7 @@ export ANDROID_HOME="$HOME/Library/Android/sdk"
 - Repo: github.com/burntcones/sonostream (public)
 - `gh` CLI is authenticated as `burntcones`
 - OTA manifest: `update.json` in repo root (raw URL: `https://raw.githubusercontent.com/burntcones/sonostream/main/update.json`)
-- Current version: versionCode 38, versionName 2.3.16
+- Current version: versionCode 40, versionName 2.3.18
 
 ## OTA Update Workflow
 1. Bump `versionCode` and `versionName` in `app/build.gradle`

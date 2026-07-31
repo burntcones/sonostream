@@ -433,6 +433,12 @@ class ApiServer(
                     })
                 }
 
+                // ── Fonts (bundled asset, NOT fetched from the network) ──
+                // Cafe WiFi frequently has no internet, so a CDN webfont silently
+                // falls back to Roboto and the UI loses its typography. Serving
+                // from assets keeps it correct offline.
+                method == Method.GET && uri.startsWith("/fonts/") -> serveFont(uri)
+
                 // ── Local playback (Bluetooth / built-in) ──
                 method == Method.GET && uri == "/api/local/status" -> {
                     jsonResponse(LocalPlayer.getStatus())
@@ -986,6 +992,9 @@ class ApiServer(
             MediaStore.Audio.Media.DATA,      // Full file path
             MediaStore.Audio.Media.RELATIVE_PATH,
             MediaStore.Audio.Media.TITLE,
+            // Duration is what staff actually choose music by — and it's how the
+            // UI flags the multi-hour mixes Sonos keeps abandoning.
+            MediaStore.Audio.Media.DURATION,
         )
 
         context.contentResolver.query(
@@ -996,6 +1005,9 @@ class ApiServer(
             val idxName = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DISPLAY_NAME)
             val idxSize = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.SIZE)
             val idxTitle = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)
+            // getColumnIndex (not …OrThrow): DURATION is absent on some OEM
+            // MediaStore builds, and a missing duration must not kill the listing.
+            val idxDur = cursor.getColumnIndex(MediaStore.Audio.Media.DURATION)
 
             while (cursor.moveToNext()) {
                 val fullPath = cursor.getString(idxData) ?: continue
@@ -1015,11 +1027,14 @@ class ApiServer(
                     it.removePrefix(Environment.getExternalStorageDirectory().absolutePath + "/")
                 } ?: ""
 
+                val durationMs = if (idxDur >= 0) cursor.getLong(idxDur) else 0L
+
                 result.put(JSONObject().apply {
                     put("path", fullPath)
                     put("name", title)
                     put("ext", ".$ext")
                     put("size", size)
+                    put("duration_ms", durationMs)
                     put("dir", dir)
                 })
             }
@@ -1033,6 +1048,23 @@ class ApiServer(
     }
 
     // ── Web UI from assets ──────────────────────────────────────────────
+
+    /** Serve a bundled woff2 from assets/fonts. Name-restricted so the route
+     *  can't be used to read arbitrary asset paths. */
+    private fun serveFont(uri: String): Response {
+        val name = uri.removePrefix("/fonts/")
+        if (!name.matches(Regex("[A-Za-z0-9_-]+\\.woff2"))) {
+            return newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "Not found")
+        }
+        return try {
+            val bytes = context.assets.open("fonts/$name").use { it.readBytes() }
+            newFixedLengthResponse(Response.Status.OK, "font/woff2", ByteArrayInputStream(bytes), bytes.size.toLong()).apply {
+                addHeader("Cache-Control", "public, max-age=31536000, immutable")
+            }
+        } catch (e: Exception) {
+            newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "Font not found")
+        }
+    }
 
     private fun serveUi(): Response {
         return try {

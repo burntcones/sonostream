@@ -6,26 +6,43 @@
 <meta name="theme-color" content="#0a0a0a">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>Sonos Streamer</title>
-<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,500;0,9..40,700;1,9..40,300&display=swap" rel="stylesheet">
 <style>
+/* Bundled locally — cafe WiFi often has no internet, and a CDN webfont would
+   silently fall back to Roboto and lose the console typography. */
+@font-face{font-family:'Archivo';src:url('/fonts/archivo.woff2') format('woff2');
+  font-weight:400 700;font-style:normal;font-display:swap}
+@font-face{font-family:'PlexMono';src:url('/fonts/plexmono.woff2') format('woff2');
+  font-weight:400;font-style:normal;font-display:swap}
+
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
 :root {
-  --bg: #0a0a0a;
-  --surface: #141414;
-  --surface2: #1c1c1c;
-  --border: #262626;
-  --text: #e8e8e8;
-  --text2: #888;
-  --accent: #ff6b2b;
-  --accent2: #ff8f5e;
-  --green: #34d399;
+  /* Console theme: machined dark panel, single white illumination.
+     Neumorphic depth comes from paired light/dark shadows (--nl / --nd). */
+  --bg: #0e100e;
+  --surface: #131513;
+  --surface2: #191b19;
+  --sunk: #090a09;
+  --border: #1e211c;
+  --text: #e4e8df;
+  --text2: #7f857c;
+  --text3: #4d524b;
+  --nl: rgba(255,255,255,.045);
+  --nd: rgba(0,0,0,.78);
+  /* --accent is the illumination; kept as the same var name so every existing
+     rule that references it lights up instead of turning orange. */
+  --accent: #f7f9f4;
+  --accent2: #c9cec3;
+  /* text/icons sitting ON the illumination — must be dark, not #fff */
+  --on-accent: #0c0e0c;
+  --glow: 0 0 12px rgba(247,249,244,.55);
+  --green: #f7f9f4;
   --radius: 14px;
   --safe-bottom: env(safe-area-inset-bottom, 0px);
 }
 
 html, body {
-  font-family: 'DM Sans', -apple-system, sans-serif;
+  font-family: 'Archivo', system-ui, -apple-system, sans-serif;
   background: var(--bg);
   color: var(--text);
   height: 100%;
@@ -33,6 +50,12 @@ html, body {
   -webkit-tap-highlight-color: transparent;
   -webkit-font-smoothing: antialiased;
 }
+/* fine panel grain — sits above the background, below all controls */
+body::after {
+  content: ''; position: fixed; inset: 0; pointer-events: none; z-index: 0; opacity: .2;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='150' height='150'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3'/></filter><rect width='150' height='150' filter='url(%23n)' opacity='.55'/></svg>");
+}
+.mono, .tnum { font-family: 'PlexMono', ui-monospace, monospace; font-variant-numeric: tabular-nums; }
 
 /* ── Layout ── */
 .app {
@@ -136,14 +159,23 @@ html, body {
   gap: 10px;
 }
 
+/* engraved badge — reads like a silkscreened socket on the panel, not a tile */
 .logo-icon {
   width: 32px;
   height: 32px;
-  background: var(--accent);
-  border-radius: 8px;
+  background: linear-gradient(145deg, #1a1c1a, #0b0d0b);
+  border-radius: 50%;
   display: grid;
   place-items: center;
+  position: relative;
+  color: var(--accent);
+  box-shadow: 3px 3px 8px rgba(0,0,0,.8), -3px -3px 7px var(--nl), 0 0 0 1px rgba(0,0,0,.5);
 }
+.logo-icon::after {
+  content: ''; position: absolute; inset: 4px; border-radius: 50%;
+  border: 1px solid rgba(255,255,255,.06);
+}
+.logo-icon svg { filter: drop-shadow(0 0 6px rgba(247,249,244,.75)); }
 
 .logo-icon svg { width: 18px; height: 18px; }
 
@@ -300,7 +332,7 @@ html, body {
   color: var(--text2);
 }
 
-.speaker-item.selected .sp-icon { background: var(--accent); color: #fff; }
+.speaker-item.selected .sp-icon { background: linear-gradient(145deg,#fff,var(--accent2)); color: var(--on-accent); box-shadow: 0 0 12px rgba(247,249,244,.45); }
 
 .speaker-item .sp-info { flex: 1; }
 .speaker-item .sp-info .sp-name { font-size: 14px; font-weight: 500; }
@@ -355,17 +387,19 @@ html, body {
 .search-input {
   width: 100%;
   padding: 10px 14px 10px 38px;
-  background: var(--surface);
-  border: 1px solid var(--border);
+  background: var(--sunk);
+  border: 1px solid transparent;
   border-radius: var(--radius);
   color: var(--text);
   font-family: inherit;
   font-size: 14px;
   outline: none;
-  transition: border-color 0.15s;
+  transition: box-shadow 0.15s;
+  /* sunken well — cut into the panel */
+  box-shadow: 4px 4px 9px rgba(0,0,0,.75) inset, -3px -3px 8px rgba(255,255,255,.028) inset;
 }
 
-.search-input:focus { border-color: var(--accent); }
+.search-input:focus { box-shadow: 4px 4px 9px rgba(0,0,0,.75) inset, -3px -3px 8px rgba(255,255,255,.028) inset, 0 0 0 1px rgba(247,249,244,.22); }
 .search-input::placeholder { color: var(--text2); }
 
 .search-icon {
@@ -386,21 +420,26 @@ html, body {
 
 .sort-btn {
   font-family: inherit;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
-  padding: 5px 10px;
-  border: 1px solid var(--border);
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  padding: 6px 12px;
+  border: 1px solid transparent;
   border-radius: 8px;
-  background: var(--surface);
+  background: linear-gradient(145deg, var(--surface2), #0c0e0c);
   color: var(--text2);
   cursor: pointer;
   transition: all 0.15s;
+  /* extruded key */
+  box-shadow: 3px 3px 7px rgba(0,0,0,.7), -3px -3px 6px var(--nl);
 }
 
 .sort-btn.active {
-  background: var(--accent);
-  color: #fff;
-  border-color: var(--accent);
+  background: linear-gradient(145deg, #fff, var(--accent2));
+  color: var(--on-accent);
+  border-color: transparent;
+  box-shadow: 0 0 14px rgba(247,249,244,.4), 3px 3px 7px rgba(0,0,0,.6);
 }
 
 .sort-btn:active { transform: scale(0.95); }
@@ -412,12 +451,12 @@ html, body {
 }
 
 .folder-header {
-  padding: 8px 20px 4px;
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--text2);
+  padding: 12px 20px 6px;
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--text3);
   text-transform: uppercase;
-  letter-spacing: 0.8px;
+  letter-spacing: 0.22em;
   position: sticky;
   top: 0;
   background: var(--bg);
@@ -449,14 +488,27 @@ html, body {
   padding: 12px 20px;
   cursor: pointer;
   transition: background 0.1s;
+  position: relative;
 }
 
-.file-item:active { background: var(--surface); }
-.file-item.playing { background: var(--surface); }
+.file-item:active {
+  box-shadow: 3px 3px 8px rgba(0,0,0,.6) inset, -2px -2px 6px rgba(255,255,255,.025) inset;
+}
+/* the playing row lifts out of the list and takes a lit edge */
+.file-item.playing {
+  background: linear-gradient(145deg, var(--surface2), #0d0f0d);
+  box-shadow: 4px 4px 12px rgba(0,0,0,.7), -3px -3px 9px var(--nl);
+}
+.file-item.playing::before {
+  content: ''; position: absolute; left: 0; top: 6px; bottom: 6px; width: 2px;
+  background: var(--accent); box-shadow: 0 0 11px rgba(247,249,244,.9);
+}
+.file-item.playing .file-name { color: #fff; text-shadow: 0 0 14px rgba(247,249,244,.3); }
 
 .file-icon {
   width: 44px; height: 44px;
-  background: var(--surface);
+  background: linear-gradient(145deg, var(--surface2), #0c0e0c);
+  box-shadow: 3px 3px 8px rgba(0,0,0,.7), -3px -3px 6px var(--nl);
   border-radius: 10px;
   display: grid;
   place-items: center;
@@ -468,8 +520,9 @@ html, body {
 }
 
 .file-item.playing .file-icon {
-  background: var(--accent);
-  color: #fff;
+  background: linear-gradient(145deg, #fff, var(--accent2));
+  color: var(--on-accent);
+  box-shadow: 0 0 12px rgba(247,249,244,.45);
 }
 
 .file-info { flex: 1; min-width: 0; }
@@ -480,6 +533,20 @@ html, body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* hour badge on multi-hour mixes — the files Sonos abandons mid-stream */
+.long-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  color: var(--on-accent);
+  background: var(--accent2);
+  vertical-align: 1px;
 }
 
 .file-meta {
@@ -581,8 +648,10 @@ html, body {
 
 .ctrl-btn.play-pause {
   width: 52px; height: 52px;
-  background: var(--accent);
-  color: #fff;
+  background: linear-gradient(145deg, #ffffff, #bcc1b6);
+  color: var(--on-accent);
+  box-shadow: 0 0 26px rgba(247,249,244,.4), 0 0 62px rgba(247,249,244,.13),
+              6px 6px 15px rgba(0,0,0,.75), -5px -5px 12px rgba(255,255,255,.06);
 }
 
 .ctrl-btn.play-pause svg { width: 26px; height: 26px; }
@@ -613,6 +682,87 @@ html, body {
   border-radius: 50%;
   cursor: pointer;
 }
+
+/* ── Volume knob (replaces the speaker volume slider) ─────────────────────
+   Extruded cap over a thin illuminated arc, with the face lit in proportion
+   to level so it reads from across the counter. */
+.vol-knob-row {
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 20px 10px;
+}
+.vol-dial {
+  width: 120px; height: 120px;
+  position: relative;
+  cursor: grab;
+  touch-action: none;
+  outline: none;
+  flex-shrink: 0;
+}
+.vol-dial.dragging { cursor: grabbing; }
+.vol-dial:focus-visible { box-shadow: 0 0 0 2px rgba(247,249,244,.5); border-radius: 50%; }
+.vol-dial svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.vol-dial .vol-track { stroke: #121410; }
+.vol-dial .vol-arc {
+  stroke: var(--accent);
+  filter: drop-shadow(0 0 4px rgba(247,249,244,.75));
+  transition: stroke-dasharray .06s linear;
+}
+.vol-dial .vol-cap {
+  position: absolute; inset: 18px; border-radius: 50%;
+  background: linear-gradient(145deg, #212420, #0a0c0a);
+  box-shadow: 8px 8px 18px rgba(0,0,0,.85), -6px -6px 15px rgba(255,255,255,.05),
+              0 1px 0 rgba(255,255,255,.10) inset;
+}
+/* pointer notch on the cap — shows rotation */
+.vol-dial .vol-cap::after {
+  content: ''; position: absolute; left: 50%; top: 9px; width: 2px; height: 13px;
+  border-radius: 1px; transform: translateX(-50%);
+  background: var(--accent); box-shadow: 0 0 8px rgba(247,249,244,.9);
+}
+.vol-dial .vol-face {
+  position: absolute; inset: 29px; border-radius: 50%; pointer-events: none;
+  background:
+    radial-gradient(circle at 50% 42%, rgba(247,249,244,.28), rgba(247,249,244,.06) 44%, transparent 72%),
+    linear-gradient(160deg, #1a1d19, #0b0d0b);
+  box-shadow: 0 0 24px rgba(247,249,244,.14) inset, 0 0 20px rgba(247,249,244,.09),
+              3px 3px 9px rgba(0,0,0,.8) inset;
+}
+.vol-dial .vol-read {
+  position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none;
+}
+.vol-dial .vol-read span {
+  font-size: 19px; font-weight: 600; color: #fff;
+  text-shadow: 0 0 16px rgba(247,249,244,.55);
+}
+.vol-name {
+  font-size: 9px; letter-spacing: .22em; text-transform: uppercase;
+  color: var(--text3); font-weight: 600; text-align: center;
+}
+
+/* ── Up Next ─────────────────────────────────────────────────────────── */
+.up-next { padding: 4px 20px 14px; }
+.up-next-head {
+  font-size: 9px; letter-spacing: .22em; text-transform: uppercase;
+  color: var(--text3); font-weight: 600; margin-bottom: 8px;
+  display: flex; align-items: center; gap: 9px;
+}
+.up-next-head::after {
+  content: ''; flex: 1; height: 1px;
+  background: linear-gradient(90deg, #22251f, transparent);
+}
+.up-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 4px 0; font-size: 12.5px; color: var(--text2);
+  cursor: pointer;
+}
+.up-row:active { opacity: .6; }
+.up-row .i { width: 14px; text-align: right; font-size: 10px; color: var(--text3); flex-shrink: 0; }
+.up-row .t { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.up-row .d { font-size: 10.5px; color: var(--text3); flex-shrink: 0; }
+.up-row:first-child .t { color: var(--text); }
+.up-empty { font-size: 11px; color: var(--text3); padding: 2px 0; }
 
 /* ── Loading / Scanning ── */
 .scanning {
@@ -702,8 +852,8 @@ html, body {
 .update-banner {
   display: none;
   padding: 10px 20px;
-  background: linear-gradient(135deg, var(--accent), #e05a1f);
-  color: #fff;
+  background: linear-gradient(135deg, var(--accent), var(--accent2));
+  color: var(--on-accent);
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
@@ -784,7 +934,7 @@ html, body {
       </div>
       <div class="sort-bar">
         <button class="sort-btn active" data-sort="name">Name</button>
-        <button class="sort-btn" data-sort="size">Size</button>
+        <button class="sort-btn" data-sort="size">Length</button>
         <button class="sort-btn" data-sort="folder">Folder</button>
         <span class="file-count" id="fileCount"></span>
       </div>
@@ -824,21 +974,27 @@ html, body {
         </button>
       </div>
       <div id="volumeControls">
-        <!-- Per-speaker volume sliders rendered by JS -->
+        <!-- Per-speaker volume knobs rendered by JS -->
+      </div>
+      <!-- What's coming next. The server owns the queue and auto-advances, but
+           staff previously had no way to see what was queued. -->
+      <div id="upNext" class="up-next" style="display:none;">
+        <div class="up-next-head">Up Next</div>
+        <div id="upNextList"></div>
       </div>
       <!-- EQ Section (Parametric EQ with streaming DSP) -->
       <div id="eqSection" style="padding:8px 20px 16px;display:none;">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
           <div style="display:flex;align-items:center;gap:8px;">
             <span style="font-size:12px;font-weight:700;letter-spacing:0.5px;text-transform:uppercase;color:var(--text2);">EQ</span>
-            <button id="btnEqBypass" style="padding:2px 8px;font-size:10px;border:1px solid var(--border);border-radius:6px;background:var(--accent);color:#fff;cursor:pointer;">ON</button>
+            <button id="btnEqBypass" style="padding:2px 8px;font-size:10px;border:1px solid var(--border);border-radius:6px;background:var(--accent);color:var(--on-accent);cursor:pointer;">ON</button>
           </div>
           <div style="display:flex;gap:6px;">
             <button id="btnEqAdd" style="padding:2px 8px;font-size:10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text2);cursor:pointer;">+ Band</button>
             <button id="btnEqReset" style="padding:2px 8px;font-size:10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text2);cursor:pointer;">Reset</button>
           </div>
         </div>
-        <canvas id="eqCanvas" width="600" height="300" style="width:100%;height:200px;background:var(--surface);border-radius:10px;border:1px solid var(--border);touch-action:none;"></canvas>
+        <canvas id="eqCanvas" width="600" height="300" style="width:100%;height:200px;background:var(--sunk);border-radius:12px;border:none;box-shadow:5px 5px 12px rgba(0,0,0,.8) inset,-3px -3px 9px rgba(255,255,255,.028) inset;touch-action:none;"></canvas>
         <div id="eqDragLabel" style="display:none;position:absolute;z-index:120;background:rgba(0,0,0,0.85);color:#fff;padding:4px 8px;border-radius:6px;font-size:11px;font-family:monospace;pointer-events:none;white-space:nowrap;"></div>
         <div id="eqBandList" style="margin-top:6px;font-size:10px;color:var(--text2);display:flex;flex-wrap:wrap;gap:4px;"></div>
       </div>
@@ -892,7 +1048,7 @@ html, body {
       <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
         <button onclick="refreshDebugLogs()" style="padding:6px 12px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text);font-size:12px;">Refresh</button>
         <button onclick="manualCheckForUpdate()" id="btnCheckUpdate" style="padding:6px 12px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text);font-size:12px;">Check Updates</button>
-        <button onclick="shareDebugLogs()" style="padding:6px 12px;border:1px solid var(--accent);border-radius:8px;background:var(--accent);color:#fff;font-size:12px;font-weight:600;">Share</button>
+        <button onclick="shareDebugLogs()" style="padding:6px 12px;border:1px solid var(--accent);border-radius:8px;background:var(--accent);color:var(--on-accent);font-size:12px;font-weight:600;">Share</button>
         <button onclick="$('debugPanel').style.display='none'" style="padding:6px 12px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text);font-size:12px;">Close</button>
       </div>
     </div>
@@ -906,7 +1062,7 @@ html, body {
       <div style="display:flex;gap:8px;">
         <button id="btnSelectAll">All</button>
         <button id="btnRescan">Rescan</button>
-        <button id="btnSheetDone" style="background:var(--accent);color:#fff;">Done</button>
+        <button id="btnSheetDone" style="background:var(--accent);color:var(--on-accent);">Done</button>
       </div>
     </div>
     <div id="speakerList"></div>
@@ -932,6 +1088,16 @@ function hasLocalSpeaker() { return selectedSpeakers.some(isLocalSpeaker); }
 function sonosSpeakers() { return selectedSpeakers.filter(s => !isLocalSpeaker(s)); }
 let autoAdvancing = false;
 let sortMode = 'name';
+
+/** "48:12" / "1:02:19". Returns '' when MediaStore gave us no duration. */
+function formatDuration(ms) {
+  if (!ms || ms <= 0) return '';
+  const t = Math.round(ms / 1000);
+  const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), s = t % 60;
+  return h > 0
+    ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+    : `${m}:${String(s).padStart(2, '0')}`;
+}
 let collapsedFolders = new Set();
 
 const $ = id => document.getElementById(id);
@@ -959,11 +1125,40 @@ async function api(method, path, body) {
 }
 
 // ─── Speakers ───────────────────────────────────────────────────────────────
+
+// Remember the speaker across launches. Each tablet is a fixed install pointed
+// at the same speaker every day, and Android restarts the foreground service
+// several times daily — which previously dropped staff back to "Select
+// Speaker…" with a play button that silently did nothing.
+const SPEAKER_KEY = 'auxSelectedSpeakers';
+
+function saveSpeakerChoice() {
+  try {
+    localStorage.setItem(SPEAKER_KEY, JSON.stringify(selectedSpeakers.map(s => s.name)));
+  } catch (e) { /* private mode / quota — selection just won't persist */ }
+}
+
+/** Re-select the previously chosen speaker(s) once discovery has run. */
+function restoreSpeakerChoice() {
+  if (selectedSpeakers.length) return;
+  let names = [];
+  try { names = JSON.parse(localStorage.getItem(SPEAKER_KEY) || '[]'); } catch (e) { return; }
+  if (!Array.isArray(names) || !names.length) return;
+  const matched = speakers.filter(s => names.includes(s.name));
+  if (matched.length) {
+    selectedSpeakers = matched;
+    renderSpeakerList();
+    renderVolumeControls();
+    fetchStatus();
+  }
+}
+
 async function loadSpeakers() {
   try {
     const data = await api('GET', '/api/speakers');
     speakers = data.speakers || [];
     renderSpeakerList();
+    restoreSpeakerChoice();
     if (speakers.length === 1 && selectedSpeakers.length === 0) toggleSpeaker(speakers[0]);
     updateSpeakerBar();
   } catch (e) {
@@ -977,6 +1172,9 @@ async function rescanSpeakers() {
     const data = await api('GET', '/api/discover');
     speakers = data.speakers || [];
     renderSpeakerList();
+    // This is the boot path (init() calls rescanSpeakers, not loadSpeakers),
+    // so the saved speaker must be restored here too.
+    restoreSpeakerChoice();
     if (speakers.length === 1 && selectedSpeakers.length === 0) toggleSpeaker(speakers[0]);
     updateSpeakerBar();
     if (!speakers.length) {
@@ -1001,6 +1199,7 @@ function toggleSpeaker(sp) {
   } else {
     selectedSpeakers.push(sp);
   }
+  saveSpeakerChoice();
   updateSpeakerBar();
   renderSpeakerList();
   renderVolumeControls();
@@ -1009,6 +1208,7 @@ function toggleSpeaker(sp) {
 
 function selectAllSpeakers() {
   selectedSpeakers = [...speakers];
+  saveSpeakerChoice();
   updateSpeakerBar();
   renderSpeakerList();
   renderVolumeControls();
@@ -1016,6 +1216,7 @@ function selectAllSpeakers() {
 
 function deselectAllSpeakers() {
   selectedSpeakers = [];
+  saveSpeakerChoice();
   updateSpeakerBar();
   renderSpeakerList();
   renderVolumeControls();
@@ -1045,7 +1246,7 @@ function renderSpeakerList() {
   }
   el.innerHTML = speakers.map(sp => {
     const memberCount = sp.group_members ? sp.group_members.length : 0;
-    const groupBadge = memberCount > 1 ? `<span style="background:var(--accent);color:#fff;font-size:10px;padding:2px 6px;border-radius:6px;margin-left:6px;">${memberCount} speakers</span>` : '';
+    const groupBadge = memberCount > 1 ? `<span style="background:var(--accent);color:var(--on-accent);font-size:10px;padding:2px 6px;border-radius:6px;margin-left:6px;">${memberCount} speakers</span>` : '';
     return `
     <div class="speaker-item ${selectedSpeakers.some(s => s.name === sp.name) ? 'selected' : ''}" data-name="${sp.name}">
       <div class="sp-icon">
@@ -1122,7 +1323,8 @@ function renderFiles(filter = '') {
   if (sortMode === 'name') {
     filtered.sort((a, b) => a.name.localeCompare(b.name));
   } else if (sortMode === 'size') {
-    filtered.sort((a, b) => b.size - a.size);
+    // longest first — pairs with the Length chip
+    filtered.sort((a, b) => (b.duration_ms || b.size || 0) - (a.duration_ms || a.size || 0));
   }
   // 'folder' keeps default grouping order
 
@@ -1143,13 +1345,18 @@ function renderFiles(filter = '') {
     html += `<div class="folder-contents ${isCollapsed ? 'collapsed' : ''}" data-folder-content="${dir}">`;
     items.forEach(f => {
       const playing = currentFile === f.path;
-      const size = f.size > 1048576 ? (f.size / 1048576).toFixed(1) + ' MB' : (f.size / 1024).toFixed(0) + ' KB';
+      // Duration, not file size — size tells staff nothing about what to play,
+      // and the hour badge surfaces the multi-hour mixes Sonos keeps dropping.
+      const meta = formatDuration(f.duration_ms)
+        || (f.size > 1048576 ? (f.size / 1048576).toFixed(1) + ' MB' : (f.size / 1024).toFixed(0) + ' KB');
+      const hrs = (f.duration_ms || 0) / 3600000;
+      const longBadge = hrs >= 1.5 ? `<span class="long-badge tnum">${Math.round(hrs)}H</span>` : '';
       html += `
         <div class="file-item ${playing ? 'playing' : ''}" data-path="${f.path}">
           <div class="file-icon">${playing ? '<span class="playing-pulse">♫</span>' : f.ext.replace('.', '')}</div>
           <div class="file-info">
-            <div class="file-name">${f.name}</div>
-            <div class="file-meta">${f.ext.replace('.', '').toUpperCase()} · ${size}</div>
+            <div class="file-name">${f.name}${longBadge}</div>
+            <div class="file-meta tnum">${meta}</div>
           </div>
           <div class="file-action">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
@@ -1194,6 +1401,34 @@ document.querySelectorAll('.sort-btn').forEach(btn => {
 });
 
 // ─── Playback ───────────────────────────────────────────────────────────────
+/** Show the next few *distinct* tracks. Mirrors the server's auto-advance,
+ *  which skips consecutive duplicates (PlaybackQueue.nextDistinctIndex) — so
+ *  what staff see here is what will actually play. */
+function renderUpNext() {
+  const wrap = $('upNext'), list = $('upNextList');
+  if (!wrap || !list) return;
+  if (!queue.length || queueIndex < 0) { wrap.style.display = 'none'; return; }
+  const currentPath = queue[queueIndex] && queue[queueIndex].path;
+  const items = [];
+  for (let i = queueIndex + 1; i < queue.length && items.length < 3; i++) {
+    const f = queue[i];
+    if (f.path === currentPath) continue;                                  // duplicate of what's playing
+    if (items.length && f.path === items[items.length - 1].path) continue; // consecutive duplicate
+    items.push(f);
+  }
+  wrap.style.display = 'block';
+  list.innerHTML = items.length
+    ? items.map((f, n) => `
+        <div class="up-row" data-path="${f.path}">
+          <div class="i tnum">${n + 1}</div>
+          <div class="t">${f.name}</div>
+          <div class="d tnum">${formatDuration(f.duration_ms)}</div>
+        </div>`).join('')
+    : '<div class="up-empty">End of queue</div>';
+  list.querySelectorAll('.up-row').forEach(r =>
+    r.addEventListener('click', () => playFile(r.dataset.path)));
+}
+
 async function playFile(path, buildQueue = true) {
   if (!selectedSpeakers.length) { openSheet(); return; }
 
@@ -1208,6 +1443,7 @@ async function playFile(path, buildQueue = true) {
   currentFile = path;
   lastPlayState = 'PLAYING';
   renderFiles($('searchInput').value);
+  renderUpNext();
 
   const name = path.split('/').pop().replace(/\.[^.]+$/, '');
   $('trackName').textContent = name;
@@ -1251,7 +1487,8 @@ async function playFile(path, buildQueue = true) {
 }
 
 async function togglePlay() {
-  if (!selectedSpeakers.length) return;
+  // No speaker chosen: open the picker rather than appearing to do nothing.
+  if (!selectedSpeakers.length) { openSheet(); return; }
   const action = isPlaying ? 'Pause' : 'Play';
   try {
     if (hasLocalSpeaker()) await api('POST', '/api/local/control', { action });
@@ -1314,52 +1551,120 @@ $('btnPrev').addEventListener('click', () => playNext(-1));
 $('btnNext').addEventListener('click', () => playNext(1));
 
 // ─── Volume ─────────────────────────────────────────────────────────────────
+// Volume is the most-used control in a cafe, so it's a physical knob rather
+// than a slider. Each knob keeps the SAME contract the polling code expects of
+// the old slider — a [data-speaker] element with a settable .value and an
+// _interacting() guard — so fetchStatus()/status-multi need no changes.
+const VOL_SWEEP = 270;      // degrees of rotation, 7-o'clock to 5-o'clock
+const VOL_DRAG_PX = 140;    // px of vertical travel for full 0→100
+const VOL_THRESHOLD = 4;    // px before a drag engages, so a tap can't nudge it
+
 function renderVolumeControls() {
   const el = $('volumeControls');
   if (selectedSpeakers.length === 0) { el.innerHTML = ''; return; }
 
   el.innerHTML = selectedSpeakers.map(sp => `
-    <div class="volume-row" style="flex-direction:column;gap:4px;padding:4px 20px;">
-      <div style="display:flex;align-items:center;gap:10px;width:100%;">
-        <svg style="flex-shrink:0;" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5L6 9H2v6h4l5 4V5z"/></svg>
-        <input class="volume-slider" type="range" min="0" max="100" value="50" data-speaker="${sp.name}" style="flex:1;">
-        <span style="font-size:11px;color:var(--text2);min-width:28px;text-align:right;" data-vol-label="${sp.name}">50</span>
+    <div class="volume-row vol-knob-row">
+      <div class="vol-dial" data-speaker="${sp.name}" role="slider"
+           aria-label="Volume for ${sp.name}" aria-valuemin="0" aria-valuemax="100" tabindex="0">
+        <svg viewBox="0 0 120 120">
+          <circle class="vol-track" cx="60" cy="60" r="50" fill="none" stroke-width="2.4"
+                  stroke-linecap="round" stroke-dasharray="235.6 314.2" transform="rotate(135 60 60)"/>
+          <circle class="vol-arc" cx="60" cy="60" r="50" fill="none" stroke-width="2.4"
+                  stroke-linecap="round" stroke-dasharray="0 314.2" transform="rotate(135 60 60)"/>
+        </svg>
+        <div class="vol-cap"></div>
+        <div class="vol-face"></div>
+        <div class="vol-read"><span class="tnum" data-vol-label="${sp.name}">50</span></div>
       </div>
-      <div style="font-size:10px;color:var(--text2);padding-left:26px;">${sp.name}</div>
+      <div class="vol-name">${sp.name}</div>
     </div>
   `).join('');
 
-  el.querySelectorAll('.volume-slider').forEach(slider => {
-    let interacting = false;
-    let guardTimer = null;
-    slider.addEventListener('input', e => {
-      interacting = true;
-      // Clear any pending guard expiry from a previous interaction
-      if (guardTimer) { clearTimeout(guardTimer); guardTimer = null; }
-      const label = el.querySelector(`[data-vol-label="${e.target.dataset.speaker}"]`);
-      if (label) label.textContent = e.target.value;
-      clearTimeout(slider._volTimeout);
-      slider._volTimeout = setTimeout(() => {
-        const speakerName = e.target.dataset.speaker;
-        const volume = +e.target.value;
-        const sp = selectedSpeakers.find(s => s.name === speakerName);
+  el.querySelectorAll('.vol-dial').forEach(dial => {
+    const name = dial.dataset.speaker;
+    const arc = dial.querySelector('.vol-arc');
+    const cap = dial.querySelector('.vol-cap');
+    const face = dial.querySelector('.vol-face');
+    const label = el.querySelector(`[data-vol-label="${name}"]`);
+    const CIRC = 2 * Math.PI * 50;
+    let val = 50, interacting = false, guardTimer = null;
+
+    function paint() {
+      arc.setAttribute('stroke-dasharray', `${((CIRC * VOL_SWEEP / 360) * val / 100).toFixed(1)} ${CIRC.toFixed(1)}`);
+      cap.style.transform = `rotate(${(-135 + VOL_SWEEP * val / 100).toFixed(1)}deg)`;
+      // the face lights up as the level rises — glanceable from across the room
+      face.style.filter = `brightness(${(0.7 + val / 100 * 0.6).toFixed(2)})`;
+      if (label) label.textContent = String(Math.round(val));
+      dial.setAttribute('aria-valuenow', String(Math.round(val)));
+    }
+
+    function push() {
+      clearTimeout(dial._volTimeout);
+      dial._volTimeout = setTimeout(() => {
+        const sp = selectedSpeakers.find(s => s.name === name);
         const isLocal = sp && sp.ip === 'local';
         const url = isLocal ? '/api/local/volume' : '/api/volume';
-        const body = isLocal ? { volume } : { speaker: speakerName, volume };
+        const body = isLocal ? { volume: Math.round(val) } : { speaker: name, volume: Math.round(val) };
         api('POST', url, body)
-          .then(r => {
-            if (r.success === false) showToast(`Vol failed (${speakerName}): ${JSON.stringify(r)}`, 'error');
-          })
-          .catch(err => showToast(`Vol error (${speakerName}): ${err.message}`, 'error'));
+          .then(r => { if (r.success === false) showToast(`Vol failed (${name}): ${JSON.stringify(r)}`, 'error'); })
+          .catch(err => showToast(`Vol error (${name}): ${err.message}`, 'error'));
       }, 150);
+    }
+
+    let startY = 0, startVal = 0, engaged = false, pointerId = null;
+    dial.addEventListener('pointerdown', e => {
+      pointerId = e.pointerId; startY = e.clientY; startVal = val; engaged = false;
+      dial.setPointerCapture(e.pointerId);
+      e.preventDefault();
     });
-    slider.addEventListener('change', () => {
-      // Keep guard active for 5s after release — gives SOAP call time to
-      // propagate and the next poll to read the new value back
+    dial.addEventListener('pointermove', e => {
+      if (pointerId !== e.pointerId) return;
+      const dy = startY - e.clientY;
+      // ignore micro-movement so brushing past the knob can't change volume
+      if (!engaged && Math.abs(dy) < VOL_THRESHOLD) return;
+      if (!engaged) { engaged = true; interacting = true; dial.classList.add('dragging'); }
+      if (guardTimer) { clearTimeout(guardTimer); guardTimer = null; }
+      val = Math.max(0, Math.min(100, startVal + (dy / VOL_DRAG_PX) * 100));
+      paint();
+      push();
+      e.preventDefault();
+    });
+    const release = e => {
+      if (pointerId !== e.pointerId) return;
+      pointerId = null; dial.classList.remove('dragging');
+      if (!engaged) return;
+      engaged = false;
+      // hold the guard 5s after release so an in-flight SOAP round-trip
+      // doesn't get overwritten by a stale poll
       if (guardTimer) clearTimeout(guardTimer);
       guardTimer = setTimeout(() => { interacting = false; }, 5000);
+    };
+    dial.addEventListener('pointerup', release);
+    dial.addEventListener('pointercancel', release);
+
+    // keyboard nudge (also makes the control screen-reader operable)
+    dial.addEventListener('keydown', e => {
+      const step = e.key === 'ArrowUp' || e.key === 'ArrowRight' ? 2
+                 : e.key === 'ArrowDown' || e.key === 'ArrowLeft' ? -2 : 0;
+      if (!step) return;
+      interacting = true;
+      val = Math.max(0, Math.min(100, val + step));
+      paint(); push();
+      if (guardTimer) clearTimeout(guardTimer);
+      guardTimer = setTimeout(() => { interacting = false; }, 5000);
+      e.preventDefault();
     });
-    slider._interacting = () => interacting;
+
+    // Same surface the old slider exposed, so fetchStatus() keeps working:
+    // `slider.value = data.volume` and `slider._interacting()`.
+    Object.defineProperty(dial, 'value', {
+      get: () => val,
+      set: v => { val = Math.max(0, Math.min(100, +v || 0)); paint(); },
+      configurable: true,
+    });
+    dial._interacting = () => interacting;
+    paint();
   });
 }
 
@@ -1560,7 +1865,9 @@ let eqResponse = null; // { frequencies, composite, bands }
 let eqDragging = -1;
 let eqVisible = false;
 
-const EQ_COLORS = ['#ff6b2b','#34d399','#60a5fa','#f472b6','#a78bfa','#fbbf24','#f87171','#2dd4bf'];
+// Monochrome ramp — bands stay distinguishable by brightness while the panel
+// keeps a single illumination colour. (Was a rainbow, which fought the theme.)
+const EQ_COLORS = ['#ffffff','#cdd2c6','#9ba095','#e6e9e0','#b4b9ad','#868b80','#dcdfd6','#a5aa9e'];
 const EQ_FREQ_MIN = 20, EQ_FREQ_MAX = 20000;
 const EQ_GAIN_MIN = -15, EQ_GAIN_MAX = 15;
 
@@ -1641,7 +1948,7 @@ function drawEq() {
   const cw = rect.width, ch = rect.height;
 
   // Background
-  eqCtx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--surface').trim();
+  eqCtx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--sunk').trim() || '#090a09';
   eqCtx.fillRect(0, 0, cw, ch);
 
   // Grid lines - frequency
@@ -1702,9 +2009,18 @@ function drawEq() {
     const y = gainToY(eqBypass ? 0 : composite[i], ch);
     i === 0 ? eqCtx.moveTo(x, y) : eqCtx.lineTo(x, y);
   }
-  eqCtx.strokeStyle = eqBypass ? 'rgba(255,255,255,0.2)' : 'var(--accent)';
+  // NOTE: canvas does NOT resolve CSS variables — 'var(--accent)' here was a
+  // no-op and the curve never took the accent colour. Use a literal.
+  eqCtx.strokeStyle = eqBypass ? 'rgba(255,255,255,0.2)' : '#f7f9f4';
   eqCtx.lineWidth = 2;
+  eqCtx.lineJoin = 'round';
+  if (!eqBypass) {
+    // illuminate the response line so it reads as a lit instrument trace
+    eqCtx.shadowColor = 'rgba(247,249,244,0.85)';
+    eqCtx.shadowBlur = 10;
+  }
   eqCtx.stroke();
+  eqCtx.shadowBlur = 0;
 
   // Gradient fill under curve
   if (!eqBypass) {
@@ -1714,9 +2030,9 @@ function drawEq() {
     eqCtx.lineTo(freqToX(freqs[0], cw), zeroY);
     eqCtx.closePath();
     const grad = eqCtx.createLinearGradient(0, 0, 0, ch);
-    grad.addColorStop(0, 'rgba(255,107,43,0.15)');
-    grad.addColorStop(0.5, 'rgba(255,107,43,0.03)');
-    grad.addColorStop(1, 'rgba(255,107,43,0.15)');
+    grad.addColorStop(0, 'rgba(247,249,244,0.16)');
+    grad.addColorStop(0.5, 'rgba(247,249,244,0.03)');
+    grad.addColorStop(1, 'rgba(247,249,244,0.16)');
     eqCtx.fillStyle = grad;
     eqCtx.fill();
   }
