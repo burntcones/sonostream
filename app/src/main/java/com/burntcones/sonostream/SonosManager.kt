@@ -323,7 +323,13 @@ object SonosManager {
                         if (location !in found.values.map { it.location }) {
                             fetchDeviceInfo(location)?.let {
                                 Log.d(TAG, "SSDP found: ${it.name} @ ${it.ip}")
-                                found[it.name] = it
+                                // Key by UUID, NOT name: bonded speakers (stereo
+                                // pair / surrounds) all report the SAME ZoneName,
+                                // so name-keying let a satellite overwrite its
+                                // primary — after which resolveGroups couldn't
+                                // find the coordinator and we targeted the
+                                // satellite, which rejects playback (UPnP 1023).
+                                found[it.uuid] = it
                             }
                         }
                     }
@@ -411,11 +417,15 @@ object SonosManager {
 
         // Parse group state XML embedded in SOAP response
         val result = mutableMapOf<String, SonosSpeaker>()
+        var satelliteUuids: Set<String> = emptySet()
         try {
             // Extract ZoneGroupState content (it's XML-escaped inside SOAP)
             val stateMatch = Pattern.compile("<ZoneGroupState>(.*?)</ZoneGroupState>", Pattern.DOTALL).matcher(data)
             if (!stateMatch.find()) return discovered.toMutableMap()
             val stateXml = unescapeXml(stateMatch.group(1)!!)
+            // Bonded satellites reject transport commands (UPnP 1023) and share
+            // their primary's room name — never expose them as playable.
+            satelliteUuids = ZoneGroups.satelliteUuids(stateXml)
 
             val doc = DocumentBuilderFactory.newInstance().newDocumentBuilder()
                 .parse(stateXml.byteInputStream())
@@ -467,8 +477,14 @@ object SonosManager {
             return discovered.toMutableMap()
         }
 
-        // Add any discovered speakers not represented in any group
+        // Add any discovered speakers not represented in any group — but NEVER a
+        // bonded satellite: it mirrors its primary and refuses playback, so
+        // adding it here is what broke BC Paragon (two Era 100s as a stereo pair).
         discovered.values.forEach { sp ->
+            if (sp.uuid in satelliteUuids) {
+                logSoap("ResolveGroups: skipping bonded satellite ${sp.name} (${sp.uuid.removePrefix("RINCON_").take(12)}) — not a playable target")
+                return@forEach
+            }
             val alreadyRepresented = result.values.any { it.uuid == sp.uuid || it.groupMembers.contains(sp.name) }
             if (!alreadyRepresented) result[sp.name] = sp
         }

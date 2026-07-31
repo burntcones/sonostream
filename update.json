@@ -1,6 +1,6 @@
 {
-  "versionCode": 38,
-  "versionName": "2.3.16",
-  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v2.3.16/aux.apk",
-  "releaseNotes": "Adds restart diagnostics: logs each app start and how long it was gone, so we can measure how often Android is shutting the app down (a likely cause of brief playback gaps). No playback behaviour changes."
+  "versionCode": 39,
+  "versionName": "2.3.17",
+  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v2.3.17/aux.apk",
+  "releaseNotes": "Fixes \"Speaker could not play this file\" on stereo-paired speakers (e.g. two Era 100s as one room). The app was sending playback to the paired speaker's second unit, which always refuses it. It now correctly targets the main speaker of the pair."
 }
