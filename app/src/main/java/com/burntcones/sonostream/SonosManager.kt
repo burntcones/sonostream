@@ -100,6 +100,12 @@ object SonosManager {
     private val soapLogs = java.util.concurrent.ConcurrentLinkedDeque<String>()
     private const val MAX_SOAP_LOGS = 200
 
+    /** The tablet's WiFi address at the time discovery last ran. Compared against
+     *  the live address so a network change can be detected — see
+     *  [Diagnostics.shouldRediscover]. Null until the first discovery. */
+    @Volatile var lastDiscoveryIp: String? = null
+        private set
+
     /** Last observed CurrentTransportState per speaker. Used to log only
      *  state CHANGES from the 2-second polling loop, not every poll. */
     private val lastTransportState = ConcurrentHashMap<String, String>()
@@ -133,11 +139,31 @@ object SonosManager {
         return "ip=${sp.ip} u=$uuidShort lastOk=${sinceSec}s"
     }
 
+    // Collapse a repeating identical failure into one entry + a count. When BC
+    // Paragon lost its network, 200/200 buffer slots filled with the same
+    // "GetTransportInfo FAILED" line within minutes, evicting the discovery,
+    // ResolveGroups and App START entries needed to diagnose it. Same class of
+    // problem as the v2.3.12 GetVolume spam.
+    private var lastRepeatKey: String = ""
+    private var lastRepeatCount: Int = 0
+
     private fun logSoap(msg: String) {
         val ts = java.text.SimpleDateFormat("HH:mm:ss.SSS", java.util.Locale.US).format(java.util.Date())
-        val entry = "[$ts] $msg"
-        soapLogs.addLast(entry)
-        while (soapLogs.size > MAX_SOAP_LOGS) soapLogs.pollFirst()
+        // key on the message shape, ignoring the volatile tail (ports, timings)
+        val key = msg.substringBefore(" body=").substringBefore(", data=").take(90)
+        synchronized(soapLogs) {
+            if (key == lastRepeatKey && soapLogs.isNotEmpty()) {
+                lastRepeatCount++
+                // rewrite the existing entry rather than appending a new one
+                soapLogs.pollLast()
+                soapLogs.addLast("[$ts] $msg  (×$lastRepeatCount consecutive)")
+            } else {
+                lastRepeatKey = key
+                lastRepeatCount = 1
+                soapLogs.addLast("[$ts] $msg")
+            }
+            while (soapLogs.size > MAX_SOAP_LOGS) soapLogs.pollFirst()
+        }
         Log.d(TAG, msg)
     }
 
@@ -248,6 +274,11 @@ object SonosManager {
         val localAddr = wifiInfo.address
         val wifiNetwork = wifiInfo.network
         wifiNet = wifiNetwork  // Store for per-socket binding in SOAP / fetchDeviceInfo
+        // Remember which network this discovery ran on. If the tablet later moves
+        // to a different WiFi, every cached speaker IP is unreachable and the
+        // audio URLs we hand Sonos point at an address we no longer own — the
+        // monitor watches for this and re-discovers (BC Paragon, 10.4 h outage).
+        lastDiscoveryIp = localAddr.hostAddress
         diag.append("Using WiFi IP: ${localAddr.hostAddress}\n")
 
         // NOTE: We intentionally do NOT call cm.bindProcessToNetwork() here.
@@ -412,7 +443,9 @@ object SonosManager {
         if (status != 200 || data.isEmpty()) {
             // Fallback: return all speakers as individual coordinators
             logSoap("ResolveGroups: ZGT query failed status=$status — falling back to individuals: ${discovered.values.joinToString { "${it.name}(${it.uuid.removePrefix("RINCON_").take(12)})" }}")
-            return discovered.toMutableMap()
+            // MUST be name-keyed — `discovered` is UUID-keyed and the whole app
+            // looks up speakers[roomName]. See SpeakerKeying.
+            return SpeakerKeying.nameKeyed(discovered, emptySet())
         }
 
         // Parse group state XML embedded in SOAP response
@@ -421,7 +454,10 @@ object SonosManager {
         try {
             // Extract ZoneGroupState content (it's XML-escaped inside SOAP)
             val stateMatch = Pattern.compile("<ZoneGroupState>(.*?)</ZoneGroupState>", Pattern.DOTALL).matcher(data)
-            if (!stateMatch.find()) return discovered.toMutableMap()
+            if (!stateMatch.find()) {
+                logSoap("ResolveGroups: no ZoneGroupState in response — falling back to individuals")
+                return SpeakerKeying.nameKeyed(discovered, emptySet())
+            }
             val stateXml = unescapeXml(stateMatch.group(1)!!)
             // Bonded satellites reject transport commands (UPnP 1023) and share
             // their primary's room name — never expose them as playable.
@@ -474,7 +510,8 @@ object SonosManager {
             }
         } catch (e: Exception) {
             e.printStackTrace()
-            return discovered.toMutableMap()
+            logSoap("ResolveGroups: parse failed (${e.message}) — falling back to individuals")
+            return SpeakerKeying.nameKeyed(discovered, satelliteUuids)
         }
 
         // Add any discovered speakers not represented in any group — but NEVER a
@@ -498,7 +535,7 @@ object SonosManager {
             logSoap("ResolveGroups: ${sp.name} coord=$coordU ip=${sp.ip} group=${sp.groupId.take(20)} members=${sp.groupMembers}")
         }
 
-        return if (result.isNotEmpty()) result else discovered.toMutableMap()
+        return if (result.isNotEmpty()) result else SpeakerKeying.nameKeyed(discovered, satelliteUuids)
     }
 
     private fun fetchDeviceInfo(location: String): SonosSpeaker? {

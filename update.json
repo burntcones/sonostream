@@ -1,6 +1,6 @@
 {
-  "versionCode": 40,
-  "versionName": "2.3.18",
-  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v2.3.18/aux.apk",
-  "releaseNotes": "Redesigned player: a proper volume knob, an Up Next list so you can see what's coming, and track lengths instead of file sizes (long mixes are flagged). The app now remembers your speaker, so it's ready to play the moment it opens."
+  "versionCode": 41,
+  "versionName": "2.3.19",
+  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v2.3.19/aux.apk",
+  "releaseNotes": "Fixes the app going unresponsive while music keeps playing. It now notices when the tablet joins a different WiFi and reconnects to the speakers automatically, instead of staying stuck on the old network."
 }

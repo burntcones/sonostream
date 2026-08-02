@@ -52,6 +52,17 @@ The EQ decode path produces a WAV stream of unknown exact size (MediaCodec outpu
 ### File Area Layout (v2.3.1)
 `.file-area` is a flex column owning `.file-toolbar` (search + sort, fixed) above `.file-list-scroll` (the actual scroller, holds `#fileList`). Folder headers use `position: sticky; top: 0` inside `.file-list-scroll`. Toolbar is OUTSIDE the scroll container, so there's no sticky-positioning gap for ghosted scrolled-past content to bleed through (the v2.3.1 fix). In tablet mode (≥768px) `.file-area` has explicit `height: calc(100vh - 120px)` to anchor the flex-wrap row, plus a 6px drag-handle `.resizer` between file area and player bar that resizes `.player-bar` width 280–720px (persisted to `localStorage.playerBarWidth`).
 
+### Two Keyings, One Map — the v2.3.17 Regression (fixed v2.3.19)
+Discovery keys `found` by **UUID** (so a stereo pair's satellite can't overwrite its primary), but ~11 call sites look up `SonosManager.speakers[roomName]`. `resolveGroups` builds a name-keyed map on its success path, but had **four fallbacks** (ZGT non-200, no `ZoneGroupState`, parse exception, empty result) returning the raw UUID-keyed map. Any fallback → every lookup misses → **all controls dead while audio keeps streaming** from the URI Sonos already holds. Latent at all outlets for two releases; never fired in the field, found by audit. All four now go through `SpeakerKeying.nameKeyed` (drops satellites, deterministic on duplicate names, never returns empty). Unit-tested — **anything assigned to `speakers` must be name-keyed.**
+
+### Network Change = Silent Death (fixed v2.3.19)
+`SonosManager.discover()` was only reachable from `/api/discover` — app launch or a manual Rescan. When a tablet joins a different WiFi, every cached speaker IP becomes unreachable and the audio URLs handed to Sonos point at an address the tablet no longer owns. **BC Paragon sat like this for 10.4 h** (tablet on `192.168.1.191`, speaker cached at `10.196.79.155`), every SOAP call timing out, staff seeing a completely unresponsive app while music from another source played on. `SonosManager.lastDiscoveryIp` now records the network discovery ran on, and the `PlaybackMonitor` loop compares it to the live IP every 15 s (before the queue guard, so it recovers while idle) via `Diagnostics.shouldRediscover` → auto re-discovery. Unit-tested.
+
+### Diagnostics Learned From the 2026-08-02 Audit
+- `/api/debug` now carries **`app_version`** and **`discovery_ip`**. Auditing the fleet there was no way to tell which build an outlet ran, or that a tablet had changed networks, except by inferring from log lines that had already rotated out.
+- `logSoap` **collapses a repeating identical failure** into one entry with a `(×N consecutive)` counter. Paragon's 200-entry SOAP buffer was 100 % identical `GetTransportInfo FAILED` lines, evicting the discovery / ResolveGroups / App START context needed to diagnose it — same failure mode as the v2.3.12 GetVolume spam.
+- **Still open:** `onStartCommand` returns `START_NOT_STICKY`, so an OS-killed service is not recreated by Android — it only returns when someone opens the app. USQ logged `downtimeSinceLastAlive=6523s` (1.8 h dead). `START_STICKY` is the leading candidate (`onTaskRemoved` already calls `stopSelf()`, so a deliberate swipe-away would still stay stopped), but the cause of the observed silences is **not yet confirmed** — don't change lifecycle semantics on a hypothesis.
+
 ### Console Redesign (v2.3.18)
 The UI is styled as audio hardware: machined dark panel, **white** illumination (single accent), neumorphic depth (paired light/dark shadows via `--nl`/`--nd`). Key move during the port: `--accent` kept its *name* but changed value from orange `#ff6b2b` to white `#f7f9f4`, so every existing rule lit up in one edit — with `--on-accent` added for text/icons sitting on the illumination (four rules were white-on-white until fixed).
 
@@ -105,7 +116,7 @@ export ANDROID_HOME="$HOME/Library/Android/sdk"
 - Repo: github.com/burntcones/sonostream (public)
 - `gh` CLI is authenticated as `burntcones`
 - OTA manifest: `update.json` in repo root (raw URL: `https://raw.githubusercontent.com/burntcones/sonostream/main/update.json`)
-- Current version: versionCode 40, versionName 2.3.18
+- Current version: versionCode 41, versionName 2.3.19
 
 ## OTA Update Workflow
 1. Bump `versionCode` and `versionName` in `app/build.gradle`

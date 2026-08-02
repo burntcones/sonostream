@@ -22,4 +22,22 @@ object Diagnostics {
         val downtime = if (lastAliveMs in 1..nowMs) "${(nowMs - lastAliveMs) / 1000}s" else "unknown"
         return "App START: v$versionName processUptime=${processUptimeMs / 1000}s downtimeSinceLastAlive=$downtime"
     }
+
+    /**
+     * True when the tablet's WiFi address no longer matches the one discovery
+     * actually ran on — meaning every cached speaker IP is potentially on a
+     * network we can no longer reach, and the audio URLs we hand Sonos point at
+     * an address we no longer own.
+     *
+     * BC Paragon sat like this for 10.4 h (tablet on 192.168.1.191, speaker
+     * cached at 10.196.79.155) because discovery only ran on launch or a manual
+     * Rescan. [discoveryIp] is null before the first discovery — nothing to
+     * compare, so don't fire. A blank or 0.0.0.0 [currentIp] happens mid-handoff
+     * and must not trigger a rescan storm.
+     */
+    fun shouldRediscover(currentIp: String?, discoveryIp: String?): Boolean {
+        if (currentIp.isNullOrBlank() || currentIp == "0.0.0.0") return false
+        if (discoveryIp.isNullOrBlank()) return false
+        return currentIp != discoveryIp
+    }
 }

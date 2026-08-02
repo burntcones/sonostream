@@ -60,6 +60,8 @@ class ApiServer(
     // v2.3.16: persist a "process alive" timestamp every ~10s so a relaunched
     // process can log how long it was gone (the silence gap from an OS kill).
     @Volatile private var lastAliveWriteMs: Long = 0L
+    @Volatile private var lastNetCheckMs: Long = 0L
+    private val NET_CHECK_INTERVAL_MS = 15_000L   // cheap check; don't scan-storm on a flapping AP
 
     init {
         LocalPlayer.init(context)
@@ -76,6 +78,7 @@ class ApiServer(
                 try {
                     Thread.sleep(3000)
                     recordAlive()
+                    checkNetworkChanged()
                     checkPlaybackForAutoAdvance()
                 } catch (e: InterruptedException) {
                     break
@@ -86,6 +89,32 @@ class ApiServer(
         }, "PlaybackMonitor").apply {
             isDaemon = true
             start()
+        }
+    }
+
+    /**
+     * Re-discover when the tablet's WiFi address stops matching the one
+     * discovery ran on.
+     *
+     * Discovery previously only ran on app launch or a manual Rescan, so a
+     * tablet that moved networks stayed pointed at unreachable speaker IPs
+     * forever — BC Paragon sat that way for 10.4 h with every control dead
+     * while audio (from another source) kept playing. Runs BEFORE the
+     * queue guard in the monitor loop so it also recovers while idle.
+     */
+    private fun checkNetworkChanged() {
+        val now = System.currentTimeMillis()
+        if (now - lastNetCheckMs < NET_CHECK_INTERVAL_MS) return
+        lastNetCheckMs = now
+        val currentIp = try { getLocalIp() } catch (_: Exception) { return }
+        val discoveryIp = SonosManager.lastDiscoveryIp
+        if (!Diagnostics.shouldRediscover(currentIp, discoveryIp)) return
+        AudioProcessor.log("Network changed: tablet is now $currentIp but speakers were discovered on $discoveryIp — re-discovering")
+        try {
+            SonosManager.discover(context)
+            AudioProcessor.log("Network changed: re-discovery found ${SonosManager.speakers.size} speaker(s)")
+        } catch (e: Exception) {
+            AudioProcessor.log("Network changed: re-discovery failed — ${e.message}")
         }
     }
 
@@ -341,6 +370,14 @@ class ApiServer(
     /** Build the diagnostics payload served at GET /api/debug. Public so the
      *  remote-log poller can grab the same dump in-process (no loopback HTTP). */
     fun debugJson(): JSONObject = JSONObject().apply {
+        // Version + the network discovery ran on. Auditing the fleet on
+        // 2026-08-02 there was no way to tell which build an outlet was running,
+        // or that a tablet had moved networks, without inferring it from log
+        // lines that had already rotated out of the ring buffer.
+        put("app_version", try {
+            context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "?"
+        } catch (e: Exception) { "?" })
+        put("discovery_ip", SonosManager.lastDiscoveryIp ?: "")
         put("diagnostics", SonosManager.lastDiagnostics)
         put("speaker_count", SonosManager.speakers.size)
         put("local_ip", getLocalIp())
