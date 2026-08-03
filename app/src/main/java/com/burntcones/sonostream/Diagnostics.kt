@@ -40,4 +40,25 @@ object Diagnostics {
         if (discoveryIp.isNullOrBlank()) return false
         return currentIp != discoveryIp
     }
+
+    /**
+     * True when the actively-used speaker hasn't answered a single SOAP call
+     * for [thresholdMs] — the signal that its cached IP is stale even though
+     * the tablet's own address never changed.
+     *
+     * BC Paragon 2026-08-03 15:15: the venue's DHCP re-addressed the SPEAKER
+     * (.115 → .114) minutes after re-addressing the tablet. [shouldRediscover]
+     * watches only the tablet's address, so nothing fired and the cached .115
+     * stayed dead for 2.4 h (state=UNKNOWN, every tap "Failed to connect").
+     *
+     * Only meaningful while a queue is active: that's when the monitor polls
+     * the speaker every 3 s, so "no success for 90 s" ≈ 30 consecutive
+     * failures. Idle, nothing polls — a large age just means "nobody asked".
+     * Null age = never succeeded = no baseline (discovery/startup handles it).
+     */
+    fun speakerUnreachableTooLong(
+        lastOkAgeMs: Long?,
+        queueActive: Boolean,
+        thresholdMs: Long = 90_000L,
+    ): Boolean = queueActive && lastOkAgeMs != null && lastOkAgeMs >= thresholdMs
 }

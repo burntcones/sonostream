@@ -37,4 +37,29 @@ class NetworkChangeTest {
         assertFalse(Diagnostics.shouldRediscover("0.0.0.0", "192.168.1.13"))
         assertFalse(Diagnostics.shouldRediscover("", "192.168.1.13"))
     }
+
+    // ── Speaker-side churn (BC Paragon, 2026-08-03 15:15): the SPEAKER's DHCP
+    // address changed while the tablet's stayed put, so shouldRediscover never
+    // fired and the cached speaker IP was dead for 2.4 h (state=UNKNOWN, every
+    // tap → "Failed to connect"). Sustained SOAP failure while a queue is
+    // active is itself the signal to re-discover. ──
+
+    @Test fun rescansWhenActiveSpeakerUnreachableTooLong() {
+        assertTrue(Diagnostics.speakerUnreachableTooLong(lastOkAgeMs = 95_000, queueActive = true))
+    }
+
+    @Test fun toleratesBriefUnreachability() {
+        // transient blips (one dropped poll) must not trigger scans
+        assertFalse(Diagnostics.speakerUnreachableTooLong(lastOkAgeMs = 30_000, queueActive = true))
+    }
+
+    @Test fun idleQueueMeansNoSoapTrafficSoAgeIsMeaningless() {
+        // with no active queue nothing polls the speaker, so a large "age since
+        // last success" just means "nobody asked" — not unreachability
+        assertFalse(Diagnostics.speakerUnreachableTooLong(lastOkAgeMs = 900_000, queueActive = false))
+    }
+
+    @Test fun neverSucceededMeansNoBaseline() {
+        assertFalse(Diagnostics.speakerUnreachableTooLong(lastOkAgeMs = null, queueActive = true))
+    }
 }

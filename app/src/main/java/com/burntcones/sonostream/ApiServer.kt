@@ -64,6 +64,8 @@ class ApiServer(
     private val NET_CHECK_INTERVAL_MS = 15_000L   // cheap check; don't scan-storm on a flapping AP
     @Volatile private var lastEmptyRescanMs: Long = 0L
     private val EMPTY_RESCAN_INTERVAL_MS = 120_000L
+    @Volatile private var lastUnreachableRescanMs: Long = 0L
+    private val UNREACHABLE_RESCAN_INTERVAL_MS = 120_000L
 
     init {
         LocalPlayer.init(context)
@@ -82,6 +84,7 @@ class ApiServer(
                     recordAlive()
                     checkNetworkChanged()
                     checkNoUsableSpeakers()
+                    checkSpeakerUnreachable()
                     checkPlaybackForAutoAdvance()
                 } catch (e: InterruptedException) {
                     break
@@ -116,9 +119,56 @@ class ApiServer(
         try {
             SonosManager.discover(context)
             AudioProcessor.log("Network changed: re-discovery found ${SonosManager.speakers.size} speaker(s)")
+            // The audio URL Sonos is holding embeds the OLD tablet IP — its
+            // stream is dead or dying even though discovery is fixed. Restart
+            // the current track so the fix actually produces music (2026-08-03:
+            // the watcher healed discovery in 7 s, yet Paragon stayed silent
+            // for an hour because nothing re-issued playback).
+            autoResumeCurrentTrack("network change")
         } catch (e: Exception) {
             AudioProcessor.log("Network changed: re-discovery failed — ${e.message}")
         }
+    }
+
+    /**
+     * Detect a speaker whose cached IP has gone stale while the tablet's own
+     * address stayed put — the [checkNetworkChanged] blind spot. BC Paragon
+     * 2026-08-03: the venue's DHCP re-addressed the SPEAKER (.115 → .114)
+     * minutes after the tablet; every SOAP call failed for 2.4 h and staff
+     * taps died with "Failed to connect" until an app restart re-discovered.
+     * Sustained failure while a queue is active IS the re-discovery signal.
+     */
+    private fun checkSpeakerUnreachable() {
+        val files = queueFiles
+        val speakerName = queueSpeakerName
+        if (files.isEmpty() || speakerName.isEmpty()) return
+        val sp = SonosManager.speakers[speakerName] ?: return
+        if (!Diagnostics.speakerUnreachableTooLong(SonosManager.lastOkAgeMs(sp.uuid), queueActive = true)) return
+        val now = System.currentTimeMillis()
+        if (now - lastUnreachableRescanMs < UNREACHABLE_RESCAN_INTERVAL_MS) return
+        lastUnreachableRescanMs = now
+        AudioProcessor.log("Monitor: ${sp.name} unanswering at ${sp.ip} for 90s+ — re-discovering (speaker may have a new IP)")
+        try {
+            SonosManager.discover(context)
+            val fresh = SonosManager.speakers[speakerName]
+            AudioProcessor.log("Monitor: unreachable re-discovery found ${SonosManager.speakers.size} speaker(s)" +
+                (fresh?.let { " — ${it.name} now at ${it.ip}" } ?: ""))
+            autoResumeCurrentTrack("speaker unreachable")
+        } catch (e: Exception) {
+            AudioProcessor.log("Monitor: unreachable re-discovery failed — ${e.message}")
+        }
+    }
+
+    /** After a recovery re-discovery, restart the queue's current track. An
+     *  active queue is standing intent to play — the interruption came from
+     *  infrastructure, not the user (a user Stop clears the queue). No-op when
+     *  the queue's speaker wasn't found by the re-discovery. */
+    private fun autoResumeCurrentTrack(reason: String) {
+        val files = queueFiles
+        val sp = SonosManager.speakers[queueSpeakerName] ?: return
+        val current = files.getOrNull(queueIndex) ?: return
+        AudioProcessor.log("Monitor: auto-resume after $reason -> ${File(current).name} on ${sp.name}@${sp.ip}")
+        playTrackOnSonos(current, sp)
     }
 
     /**

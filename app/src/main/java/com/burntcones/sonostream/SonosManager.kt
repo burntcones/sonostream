@@ -173,6 +173,12 @@ object SonosManager {
      *  - Same UUID has been failing for hundreds of seconds → not a transient blip
      *  - UUID differs from a previous-known coordinator UUID → group coordinator shift (H2)
      */
+    /** Milliseconds since this speaker last answered any SOAP call, or null if
+     *  it never has. Fed to [Diagnostics.speakerUnreachableTooLong] so the
+     *  monitor can detect a speaker whose cached IP has gone stale. */
+    fun lastOkAgeMs(uuid: String): Long? =
+        lastSoapSuccessMs[uuid]?.let { System.currentTimeMillis() - it }
+
     private fun speakerCtx(sp: SonosSpeaker): String {
         val last = lastSoapSuccessMs[sp.uuid]
         val sinceSec = if (last != null) (System.currentTimeMillis() - last) / 1000 else -1L

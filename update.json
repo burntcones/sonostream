@@ -1,6 +1,6 @@
 {
-  "versionCode": 42,
-  "versionName": "2.3.20",
-  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v2.3.20/aux.apk",
-  "releaseNotes": "Fixes \"Speaker could not play this file\" recurring on stereo-paired speakers. The app now remembers which unit of the pair is the main one, so a scan that only finds the second unit can no longer break playback — and it keeps rescanning by itself until the right speaker is found, instead of needing an app restart."
+  "versionCode": 43,
+  "versionName": "2.3.21",
+  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v2.3.21/aux.apk",
+  "releaseNotes": "Playback now survives WiFi router changes on its own: if the speaker stops answering (e.g. it got a new address), the app finds it again within ~2 minutes AND restarts the interrupted track automatically — no more app restarts to bring music back. Includes the earlier stereo-pair fix."
 }
