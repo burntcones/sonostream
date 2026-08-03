@@ -106,6 +106,47 @@ object SonosManager {
     @Volatile var lastDiscoveryIp: String? = null
         private set
 
+    // ── Persisted satellite knowledge ────────────────────────────────────
+    // Which UUIDs are bonded satellites (stereo-pair second unit, surrounds,
+    // subs). Learned from successful ZGT parses and persisted so it survives
+    // discoveries where the satellite is the ONLY unit SSDP hears back from —
+    // in that case ZGT (answered by the satellite itself) reveals no topology
+    // and, without memory, the app adopts the satellite → UPnP 1023 on every
+    // play (BC Paragon, 2026-08-03). See ZoneGroups.effectiveSatellites.
+    @Volatile private var knownSatellites: Set<String> = emptySet()
+    @Volatile private var satellitesLoaded = false
+    private var appContext: Context? = null
+    private const val TOPO_PREFS = "sonos_topology"
+    private const val KEY_SATELLITES = "known_satellites"
+
+    private fun loadKnownSatellites(context: Context?) {
+        if (context != null) appContext = context.applicationContext
+        if (satellitesLoaded) return
+        val ctx = appContext ?: return
+        try {
+            val raw = ctx.getSharedPreferences(TOPO_PREFS, Context.MODE_PRIVATE)
+                .getString(KEY_SATELLITES, null)
+            if (raw != null) {
+                val arr = org.json.JSONArray(raw)
+                knownSatellites = (0 until arr.length()).map { arr.getString(it) }.toSet()
+            }
+            satellitesLoaded = true
+        } catch (_: Exception) { /* best-effort — worst case we re-learn from ZGT */ }
+    }
+
+    /** Replace (not union) on fresh knowledge, so a re-bonded pair with swapped
+     *  roles heals on the next good parse instead of both units being excluded. */
+    private fun saveKnownSatellites(fresh: Set<String>) {
+        if (fresh.isEmpty() || fresh == knownSatellites) return
+        knownSatellites = fresh
+        val ctx = appContext ?: return
+        try {
+            ctx.getSharedPreferences(TOPO_PREFS, Context.MODE_PRIVATE).edit()
+                .putString(KEY_SATELLITES, org.json.JSONArray(fresh.toList()).toString()).apply()
+            logSoap("Topology: persisted satellite UUIDs ${fresh.map { it.removePrefix("RINCON_").take(12) }}")
+        } catch (_: Exception) { /* best-effort */ }
+    }
+
     /** Last observed CurrentTransportState per speaker. Used to log only
      *  state CHANGES from the 2-second polling loop, not every poll. */
     private val lastTransportState = ConcurrentHashMap<String, String>()
@@ -258,11 +299,26 @@ object SonosManager {
     }
 
     fun discover(context: Context? = null, timeoutMs: Int = 4000): Map<String, SonosSpeaker> {
+        // The monitor can now trigger re-discovery (network change / no usable
+        // speakers) alongside UI-driven /api/discover — don't let two SSDP
+        // scans interleave; the loser just uses the winner's result.
+        if (!discoverInFlight.compareAndSet(false, true)) return speakers
+        try {
+            return discoverLocked(context, timeoutMs)
+        } finally {
+            discoverInFlight.set(false)
+        }
+    }
+
+    private val discoverInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    private fun discoverLocked(context: Context?, timeoutMs: Int): Map<String, SonosSpeaker> {
         val found = mutableMapOf<String, SonosSpeaker>()
         val diag = StringBuilder()
 
         val wifiInfo = if (context != null) getWifiInfo(context) else null
         diag.append(lastDiagnostics)
+        loadKnownSatellites(context)
 
         if (wifiInfo == null) {
             diag.append("ABORT: No WiFi address detected\n")
@@ -432,8 +488,11 @@ object SonosManager {
     private fun resolveGroups(discovered: Map<String, SonosSpeaker>): MutableMap<String, SonosSpeaker> {
         if (discovered.isEmpty()) return mutableMapOf()
 
-        // Query ZoneGroupTopology from the first available speaker
-        val anySpeaker = discovered.values.first()
+        // Query ZoneGroupTopology — prefer a unit we don't already know to be a
+        // satellite: a satellite answers ZGT but may reveal no topology, which
+        // is how the only-satellite discovery trap forms.
+        val anySpeaker = discovered.values.firstOrNull { it.uuid !in knownSatellites }
+            ?: discovered.values.first()
         val zgtUrl = "/ZoneGroupTopology/Control"
         logSoap("ResolveGroups: querying ZGT via ${anySpeaker.name} ${speakerCtx(anySpeaker)} (${discovered.size} discovered)")
         val (status, data) = soap(anySpeaker, zgtUrl,
@@ -444,8 +503,9 @@ object SonosManager {
             // Fallback: return all speakers as individual coordinators
             logSoap("ResolveGroups: ZGT query failed status=$status — falling back to individuals: ${discovered.values.joinToString { "${it.name}(${it.uuid.removePrefix("RINCON_").take(12)})" }}")
             // MUST be name-keyed — `discovered` is UUID-keyed and the whole app
-            // looks up speakers[roomName]. See SpeakerKeying.
-            return SpeakerKeying.nameKeyed(discovered, emptySet())
+            // looks up speakers[roomName]. Persisted satellite knowledge still
+            // applies: without ZGT this discovery can't tell who's bonded.
+            return SpeakerKeying.nameKeyed(discovered, knownSatellites)
         }
 
         // Parse group state XML embedded in SOAP response
@@ -456,12 +516,17 @@ object SonosManager {
             val stateMatch = Pattern.compile("<ZoneGroupState>(.*?)</ZoneGroupState>", Pattern.DOTALL).matcher(data)
             if (!stateMatch.find()) {
                 logSoap("ResolveGroups: no ZoneGroupState in response — falling back to individuals")
-                return SpeakerKeying.nameKeyed(discovered, emptySet())
+                return SpeakerKeying.nameKeyed(discovered, knownSatellites)
             }
             val stateXml = unescapeXml(stateMatch.group(1)!!)
             // Bonded satellites reject transport commands (UPnP 1023) and share
-            // their primary's room name — never expose them as playable.
-            satelliteUuids = ZoneGroups.satelliteUuids(stateXml)
+            // their primary's room name — never expose them as playable. Fresh
+            // ZGT knowledge wins and is persisted; when this parse reveals
+            // nothing (e.g. ZGT answered by the satellite itself), fall back to
+            // what previous discoveries learned.
+            val freshSatellites = ZoneGroups.satelliteUuids(stateXml)
+            saveKnownSatellites(freshSatellites)
+            satelliteUuids = ZoneGroups.effectiveSatellites(freshSatellites, knownSatellites)
 
             val doc = DocumentBuilderFactory.newInstance().newDocumentBuilder()
                 .parse(stateXml.byteInputStream())
@@ -511,7 +576,9 @@ object SonosManager {
         } catch (e: Exception) {
             e.printStackTrace()
             logSoap("ResolveGroups: parse failed (${e.message}) — falling back to individuals")
-            return SpeakerKeying.nameKeyed(discovered, satelliteUuids)
+            // The exception may have fired before satelliteUuids was assigned —
+            // effectiveSatellites falls back to persisted knowledge either way.
+            return SpeakerKeying.nameKeyed(discovered, ZoneGroups.effectiveSatellites(satelliteUuids, knownSatellites))
         }
 
         // Add any discovered speakers not represented in any group — but NEVER a

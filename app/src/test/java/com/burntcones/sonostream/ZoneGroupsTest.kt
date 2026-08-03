@@ -53,4 +53,22 @@ class ZoneGroupsTest {
         assertEquals(emptySet<String>(), ZoneGroups.satelliteUuids(""))
         assertEquals(emptySet<String>(), ZoneGroups.satelliteUuids("<ZoneGroups/>"))
     }
+
+    // ── effectiveSatellites: fresh ZGT knowledge wins, else fall back to what
+    // we learned in past discoveries. BC Paragon 2026-08-03: SSDP caught ONLY
+    // the satellite; ZGT (queried via the satellite) revealed no topology, so
+    // fresh knowledge was empty and the app adopted the satellite → UPnP 1023
+    // on every play. Persisted knowledge must cover that gap. ──
+
+    @Test fun freshParseWinsOverPersisted() {
+        assertEquals(setOf("RINCON_NEW"), ZoneGroups.effectiveSatellites(setOf("RINCON_NEW"), setOf("RINCON_OLD")))
+    }
+
+    @Test fun fallsBackToPersistedWhenFreshIsEmpty() {
+        assertEquals(setOf("RINCON_OLD"), ZoneGroups.effectiveSatellites(emptySet(), setOf("RINCON_OLD")))
+    }
+
+    @Test fun bothEmptyMeansNoKnowledge() {
+        assertEquals(emptySet<String>(), ZoneGroups.effectiveSatellites(emptySet(), emptySet()))
+    }
 }

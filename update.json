@@ -1,6 +1,6 @@
 {
-  "versionCode": 41,
-  "versionName": "2.3.19",
-  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v2.3.19/aux.apk",
-  "releaseNotes": "Fixes the app going unresponsive while music keeps playing. It now notices when the tablet joins a different WiFi and reconnects to the speakers automatically, instead of staying stuck on the old network."
+  "versionCode": 42,
+  "versionName": "2.3.20",
+  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v2.3.20/aux.apk",
+  "releaseNotes": "Fixes \"Speaker could not play this file\" recurring on stereo-paired speakers. The app now remembers which unit of the pair is the main one, so a scan that only finds the second unit can no longer break playback — and it keeps rescanning by itself until the right speaker is found, instead of needing an app restart."
 }

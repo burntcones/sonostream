@@ -22,27 +22,27 @@ object SpeakerKeying {
      *
      * Bonded satellites in [satellites] are dropped — they mirror their primary
      * and reject transport commands with UPnP 1023. When two speakers still
-     * share a name (ZGT unavailable, so we can't tell which is bonded), the
-     * lowest UUID wins so the choice is stable across discoveries rather than
-     * depending on SSDP answer order.
+     * share a name (no satellite knowledge at all, so we can't tell which is
+     * bonded), the lowest UUID wins so the choice is stable across discoveries
+     * rather than depending on SSDP answer order.
      *
-     * Never returns empty for a non-empty input: a mis-parse that flagged every
-     * speaker as a satellite would otherwise leave the app with no speaker at
-     * all, which is strictly worse than an imperfect guess.
+     * MAY return empty when everything discovered is a known satellite (e.g.
+     * SSDP caught only the pair's second unit — BC Paragon, 2026-08-03). v2.3.19
+     * had a "never empty — better a usable guess than none" rescue here, which
+     * was wrong: a satellite half-works (answers volume/state) but 1023s every
+     * transport command, so handing it back guarantees "Speaker could not play
+     * this file". Empty is strictly better — the monitor keeps re-discovering
+     * until a playable unit answers.
      */
     fun nameKeyed(
         discovered: Map<String, SonosSpeaker>,
         satellites: Set<String>,
     ): MutableMap<String, SonosSpeaker> {
-        if (discovered.isEmpty()) return mutableMapOf()
-
-        var candidates = discovered.values.filter { it.uuid !in satellites }
-        if (candidates.isEmpty()) candidates = discovered.values.toList()
-
         val out = mutableMapOf<String, SonosSpeaker>()
-        candidates.sortedBy { it.uuid }.forEach { sp ->
-            if (!out.containsKey(sp.name)) out[sp.name] = sp
-        }
+        discovered.values
+            .filter { it.uuid !in satellites }
+            .sortedBy { it.uuid }
+            .forEach { sp -> if (!out.containsKey(sp.name)) out[sp.name] = sp }
         return out
     }
 }

@@ -62,6 +62,8 @@ class ApiServer(
     @Volatile private var lastAliveWriteMs: Long = 0L
     @Volatile private var lastNetCheckMs: Long = 0L
     private val NET_CHECK_INTERVAL_MS = 15_000L   // cheap check; don't scan-storm on a flapping AP
+    @Volatile private var lastEmptyRescanMs: Long = 0L
+    private val EMPTY_RESCAN_INTERVAL_MS = 120_000L
 
     init {
         LocalPlayer.init(context)
@@ -79,6 +81,7 @@ class ApiServer(
                     Thread.sleep(3000)
                     recordAlive()
                     checkNetworkChanged()
+                    checkNoUsableSpeakers()
                     checkPlaybackForAutoAdvance()
                 } catch (e: InterruptedException) {
                     break
@@ -115,6 +118,29 @@ class ApiServer(
             AudioProcessor.log("Network changed: re-discovery found ${SonosManager.speakers.size} speaker(s)")
         } catch (e: Exception) {
             AudioProcessor.log("Network changed: re-discovery failed — ${e.message}")
+        }
+    }
+
+    /**
+     * Keep re-discovering while the app holds no usable Sonos speaker.
+     *
+     * Discovery can legitimately end empty: SSDP is a 4 s lottery, and when the
+     * only unit that answers is a stereo pair's bonded satellite we now refuse
+     * to adopt it (it 1023s every transport command — BC Paragon 2026-08-03).
+     * Without this retry, "empty" would stay empty until a human taps Rescan.
+     * At a site with no Sonos at all this costs one SSDP scan every ~2 min,
+     * which is a few UDP packets — acceptable.
+     */
+    private fun checkNoUsableSpeakers() {
+        if (SonosManager.speakers.isNotEmpty()) return
+        val now = System.currentTimeMillis()
+        if (now - lastEmptyRescanMs < EMPTY_RESCAN_INTERVAL_MS) return
+        lastEmptyRescanMs = now
+        try {
+            val n = SonosManager.discover(context).size
+            if (n > 0) AudioProcessor.log("Monitor: re-discovery after empty speaker list found $n speaker(s)")
+        } catch (e: Exception) {
+            AudioProcessor.log("Monitor: empty-list re-discovery failed — ${e.message}")
         }
     }
 

@@ -20,4 +20,23 @@ object ZoneGroups {
             .findAll(stateXml)
             .map { it.groupValues[1] }
             .toSet()
+
+    /**
+     * The satellite set discovery should act on: fresh ZGT knowledge when this
+     * discovery produced any, else what previous discoveries learned.
+     *
+     * Why persistence matters (BC Paragon, 2026-08-03): SSDP is a lottery — a
+     * 4 s window in which units may or may not answer. When it caught ONLY the
+     * stereo pair's satellite, the ZGT query (answered by the satellite itself)
+     * revealed no topology, fresh knowledge was empty, and the app adopted the
+     * satellite as the room's speaker — every play then failed with UPnP 1023.
+     * A satellite doesn't stop being a satellite because one discovery failed
+     * to say so; once learned, the knowledge must outlive the discovery (and
+     * the process — it's persisted to SharedPreferences by SonosManager).
+     *
+     * Fresh wins over persisted so a re-bonded pair (roles swapped) heals on
+     * the next successful parse instead of being fought by stale memory.
+     */
+    fun effectiveSatellites(fresh: Set<String>, persisted: Set<String>): Set<String> =
+        if (fresh.isNotEmpty()) fresh else persisted
 }

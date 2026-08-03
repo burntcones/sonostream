@@ -58,11 +58,18 @@ class SpeakerKeyingTest {
         assertEquals(setOf("Kitchen", "Patio"), SpeakerKeying.nameKeyed(two, emptySet()).keys)
     }
 
-    @Test fun neverReturnsEmptyWhenEverythingLooksLikeASatellite() {
-        // Defensive: a bad ZGT parse marking everything a satellite must not
-        // leave the app with zero speakers — better a usable guess than none.
-        val out = SpeakerKeying.nameKeyed(paragon, satellites = setOf("RINCON_PRIMARY", "RINCON_SATELLITE"))
-        assertEquals(setOf("BC Paragon"), out.keys)
+    @Test fun returnsEmptyWhenOnlyKnownSatellitesRemain() {
+        // v2.3.19 had a "never return empty — better a usable guess than none"
+        // rescue here. That premise was WRONG for satellites: a satellite
+        // half-works (answers GetVolume/state) but refuses every transport
+        // command with UPnP 1023, so "using" it means every play fails with
+        // "Speaker could not play this file" (BC Paragon, 2026-08-03, when
+        // SSDP discovered only the satellite). An empty result is strictly
+        // better: the UI shows no speaker and the monitor keeps re-discovering
+        // until the primary answers.
+        val onlySatellite = mapOf("RINCON_SATELLITE" to paragon.getValue("RINCON_SATELLITE"))
+        assertTrue(SpeakerKeying.nameKeyed(onlySatellite, setOf("RINCON_SATELLITE")).isEmpty())
+        assertTrue(SpeakerKeying.nameKeyed(paragon, setOf("RINCON_PRIMARY", "RINCON_SATELLITE")).isEmpty())
     }
 
     @Test fun emptyInEmptyOut() {
