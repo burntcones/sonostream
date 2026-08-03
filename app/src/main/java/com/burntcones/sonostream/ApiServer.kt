@@ -404,6 +404,16 @@ class ApiServer(
             context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "?"
         } catch (e: Exception) { "?" })
         put("discovery_ip", SonosManager.lastDiscoveryIp ?: "")
+        // Which physical device produced this dump. Two devices (the counter
+        // tablet + the owner's phone running the APK) uploaded interleaved as
+        // "BC Paragon" on 2026-08-03 — the device key is just the room name, so
+        // without these fields the history reads as one schizophrenic device.
+        put("device_model", android.os.Build.MODEL ?: "?")
+        put("device_id", try {
+            (android.provider.Settings.Secure.getString(
+                context.contentResolver, android.provider.Settings.Secure.ANDROID_ID
+            ) ?: "").take(6)
+        } catch (e: Exception) { "?" })
         put("diagnostics", SonosManager.lastDiagnostics)
         put("speaker_count", SonosManager.speakers.size)
         put("local_ip", getLocalIp())
