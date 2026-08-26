@@ -62,4 +62,36 @@ class NetworkChangeTest {
     @Test fun neverSucceededMeansNoBaseline() {
         assertFalse(Diagnostics.speakerUnreachableTooLong(lastOkAgeMs = null, queueActive = true))
     }
+
+    // ── Auto-resume state gate. BC USQ report: staff pause at close and lock
+    // the tablet; overnight network churn triggers recovery re-discovery and
+    // v2.3.21's auto-resume started music in a closed shop. Resume must only
+    // fire when the speaker was actually PLAYING before the outage — a queue
+    // plus PAUSED is "staff stopped for now", not standing intent. ──
+
+    @Test fun resumesOnlyWhenItWasActuallyPlaying() {
+        assertTrue(Diagnostics.shouldAutoResume("PLAYING"))
+        assertTrue(Diagnostics.shouldAutoResume("TRANSITIONING"))
+    }
+
+    @Test fun neverResumesFromPauseOrStopOrUnknown() {
+        assertFalse(Diagnostics.shouldAutoResume("PAUSED_PLAYBACK"))
+        assertFalse(Diagnostics.shouldAutoResume("STOPPED"))
+        assertFalse(Diagnostics.shouldAutoResume("UNKNOWN"))
+        assertFalse(Diagnostics.shouldAutoResume(""))
+    }
+
+    // ── Foreign-stream detection: anything Sonos plays that we didn't serve
+    // (Spotify Connect, Sonos app, alarms). Monitor must stand down, not
+    // hijack. Ours always contains ":8077/audio/" regardless of tablet IP. ──
+
+    @Test fun foreignUriDetected() {
+        assertTrue(Diagnostics.isForeignUri("x-sonos-spotify:spotify%3atrack%3aabc?sid=12"))
+        assertTrue(Diagnostics.isForeignUri("x-rincon-queue:RINCON_ABC#0"))
+    }
+
+    @Test fun ourStreamAndIdleAreNotForeign() {
+        assertFalse(Diagnostics.isForeignUri("http://192.168.1.111:8077/audio/%2Fstorage%2Femulated%2F0%2FMusic%2Fa.mp3"))
+        assertFalse(Diagnostics.isForeignUri(""))   // no session at all
+    }
 }

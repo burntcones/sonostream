@@ -35,6 +35,10 @@ class ApiServer(
     @Volatile private var queueIndex: Int = 0
     @Volatile private var queueSpeakerName: String = ""
     @Volatile private var lastMonitoredState: String = ""
+    // Last state that wasn't UNKNOWN — outage polls return UNKNOWN and must not
+    // erase what the speaker was doing before it went dark (auto-resume gate).
+    @Volatile private var lastRealTransportState: String = ""
+    @Volatile private var foreignSessionActive: Boolean = false
     @Volatile private var monitorRunning: Boolean = true
     private var monitorThread: Thread? = null
 
@@ -164,6 +168,15 @@ class ApiServer(
      *  infrastructure, not the user (a user Stop clears the queue). No-op when
      *  the queue's speaker wasn't found by the re-discovery. */
     private fun autoResumeCurrentTrack(reason: String) {
+        // Only when the speaker was actually PLAYING before the outage. A
+        // queue plus PAUSED/STOPPED is "staff stopped for now" — v2.3.21
+        // resumed on queue alone and started music overnight in a closed shop
+        // (BC USQ) when DHCP churn fired the recovery path.
+        if (!Diagnostics.shouldAutoResume(lastRealTransportState)) {
+            AudioProcessor.log("Monitor: skipping auto-resume after $reason — last real state was '$lastRealTransportState', not PLAYING")
+            return
+        }
+        if (foreignSessionActive) return
         val files = queueFiles
         val sp = SonosManager.speakers[queueSpeakerName] ?: return
         val current = files.getOrNull(queueIndex) ?: return
@@ -222,9 +235,30 @@ class ApiServer(
         val state = SonosManager.getTransportInfo(sp)
         val prev = lastMonitoredState
         lastMonitoredState = state
+        if (state != "UNKNOWN") lastRealTransportState = state
 
         val now = System.currentTimeMillis()
         val pos = SonosManager.getPositionInfo(sp)
+
+        // ── Foreign-session stand-down ────────────────────────────────
+        // Sonos is playing something we didn't serve (Spotify Connect, the
+        // Sonos app, an alarm). None of the recovery/advance logic below may
+        // run — it would yank the speaker away mid-song. Queue stays parked;
+        // we resume normal duty when our own stream is back.
+        val uri = pos.optString("uri", "")
+        if (Diagnostics.isForeignUri(uri)) {
+            if (!foreignSessionActive) {
+                foreignSessionActive = true
+                AudioProcessor.log("Monitor: foreign stream on ${sp.name} (${uri.take(60)}) — standing down")
+            }
+            lastPositionSec = -1
+            lastPositionChangeAtMs = 0L
+            return
+        }
+        if (foreignSessionActive) {
+            foreignSessionActive = false
+            AudioProcessor.log("Monitor: foreign stream ended — resuming monitor duty")
+        }
         val posSec = timeStrToSec(pos.optString("position", "0:00:00"))
         val durSec = timeStrToSec(pos.optString("duration", "0:00:00"))
 

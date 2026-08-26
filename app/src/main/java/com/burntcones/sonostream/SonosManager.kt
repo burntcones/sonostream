@@ -841,8 +841,13 @@ object SonosManager {
             val metaMatch = Pattern.compile("<TrackMetaData>(.*?)</TrackMetaData>", Pattern.DOTALL).matcher(data)
             if (metaMatch.find()) {
                 val meta = unescapeXml(metaMatch.group(1)!!)
-                val titleMatch = Pattern.compile("<dc:title>(.*?)</dc:title>").matcher(meta)
-                if (titleMatch.find()) info.put("track", titleMatch.group(1))
+                // Artist/album/art matter for foreign sessions (Spotify Connect,
+                // Sonos app) — Sonos reports full DIDL metadata for any source,
+                // so the UI can show what's playing without touching the stream.
+                for ((tag, key) in listOf("dc:title" to "track", "dc:creator" to "artist", "upnp:album" to "album", "upnp:albumArtURI" to "album_art")) {
+                    val m = Pattern.compile("<$tag>(.*?)</$tag>", Pattern.DOTALL).matcher(meta)
+                    if (m.find()) info.put(key, m.group(1)!!.trim())
+                }
             }
         } else {
             logSoap("GetPositionInfo FAILED: ${speaker.name} status=$status body=${data.take(800)} [${speakerCtx(speaker)}]")

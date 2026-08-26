@@ -609,6 +609,19 @@ body::after {
 
 .player-track-info { flex: 1; min-width: 0; }
 
+.foreign-badge {
+  display: inline-block;
+  margin-top: 4px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: .18em;
+  color: var(--on-accent);
+  background: var(--accent2);
+  width: fit-content;
+}
+
 .player-track-name {
   font-size: 14px;
   font-weight: 600;
@@ -956,6 +969,7 @@ body::after {
       <div class="player-track">
         <div class="player-track-info">
           <div class="player-track-name" id="trackName">—</div>
+          <div class="foreign-badge" id="foreignBadge" style="display:none;">EXTERNAL STREAM</div>
           <div class="player-track-time"><span id="trackPos">0:00</span> / <span id="trackDur">0:00</span> · <span id="queuePos"></span></div>
         </div>
       </div>
@@ -1765,8 +1779,22 @@ async function fetchStatus() {
     }
     lastPlayState = newState;
 
-    if (data.position?.track && data.position.track !== $('trackName').textContent) {
-      $('trackName').textContent = data.position.track;
+    // Foreign session (Spotify Connect, Sonos app, alarm): Sonos reports full
+    // metadata for any source over UPnP — display it, badge it, and leave the
+    // queue indicator alone. Our own stream always contains ":8077/audio/".
+    const posUri = data.position?.uri || '';
+    const foreign = posUri !== '' && !posUri.includes(':8077/audio/');
+    if (foreign) {
+      const t = data.position?.track || 'External stream';
+      const artist = data.position?.artist ? ' — ' + data.position.artist : '';
+      const label = t + artist;
+      if ($('trackName').textContent !== label) $('trackName').textContent = label;
+      $('foreignBadge').style.display = newState === 'PLAYING' || newState === 'PAUSED_PLAYBACK' ? 'block' : 'none';
+    } else {
+      $('foreignBadge').style.display = 'none';
+      if (data.position?.track && data.position.track !== $('trackName').textContent) {
+        $('trackName').textContent = data.position.track;
+      }
     }
 
     // Fetch volume for other selected speakers (non-blocking)

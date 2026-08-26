@@ -61,4 +61,29 @@ object Diagnostics {
         queueActive: Boolean,
         thresholdMs: Long = 90_000L,
     ): Boolean = queueActive && lastOkAgeMs != null && lastOkAgeMs >= thresholdMs
+
+    /**
+     * Gate for [autoResumeCurrentTrack]: only restart playback after a recovery
+     * re-discovery if the speaker was actually PLAYING before the outage.
+     *
+     * v2.3.21 resumed whenever a queue existed. BC USQ: staff pause at close
+     * (Pause keeps the queue; only Stop clears it) and lock the tablet;
+     * overnight DHCP churn fired the recovery path and music started in a
+     * closed shop. A queue plus PAUSED/STOPPED is "not now", not standing
+     * intent. [lastRealState] must be the last state that wasn't UNKNOWN —
+     * during an outage polls return UNKNOWN, which must not erase what the
+     * speaker was doing before it went dark.
+     */
+    fun shouldAutoResume(lastRealState: String): Boolean =
+        lastRealState == "PLAYING" || lastRealState == "TRANSITIONING"
+
+    /**
+     * True when Sonos is playing something we didn't serve (Spotify Connect,
+     * the Sonos app, alarms). Our URIs always contain ":8077/audio/" whatever
+     * the tablet's current IP; empty means no session at all. The monitor must
+     * stand down for foreign sessions — advancing/zombie logic would yank the
+     * speaker away mid-song.
+     */
+    fun isForeignUri(uri: String): Boolean =
+        uri.isNotEmpty() && !uri.contains(":8077/audio/")
 }
