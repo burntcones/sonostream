@@ -1,6 +1,6 @@
 {
-  "versionCode": 43,
-  "versionName": "2.3.21",
-  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v2.3.21/aux.apk",
-  "releaseNotes": "Playback now survives WiFi router changes on its own: if the speaker stops answering (e.g. it got a new address), the app finds it again within ~2 minutes AND restarts the interrupted track automatically — no more app restarts to bring music back. Includes the earlier stereo-pair fix."
+  "versionCode": 44,
+  "versionName": "2.3.22",
+  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v2.3.22/aux.apk",
+  "releaseNotes": "Fixes music starting by itself overnight: auto-recovery now only resumes playback if music was actually playing when the connection dropped — a paused queue stays paused. Also: if someone plays Spotify or uses the Sonos app directly, Aux now shows what's playing (with an External Stream badge) and stays out of the way instead of interrupting it."
 }

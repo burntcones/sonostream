@@ -52,6 +52,12 @@ The EQ decode path produces a WAV stream of unknown exact size (MediaCodec outpu
 ### File Area Layout (v2.3.1)
 `.file-area` is a flex column owning `.file-toolbar` (search + sort, fixed) above `.file-list-scroll` (the actual scroller, holds `#fileList`). Folder headers use `position: sticky; top: 0` inside `.file-list-scroll`. Toolbar is OUTSIDE the scroll container, so there's no sticky-positioning gap for ghosted scrolled-past content to bleed through (the v2.3.1 fix). In tablet mode (≥768px) `.file-area` has explicit `height: calc(100vh - 120px)` to anchor the flex-wrap row, plus a 6px drag-handle `.resizer` between file area and player bar that resizes `.player-bar` width 280–720px (persisted to `localStorage.playerBarWidth`).
 
+### Auto-Resume State Gate + Foreign-Stream Stand-Down (v2.3.22)
+Two related monitor behaviours, one release:
+- **Auto-resume gate.** v2.3.21's `autoResumeCurrentTrack` fired after any recovery re-discovery whenever a queue existed — never checked transport state. BC USQ reported music starting overnight in a closed shop: staff pause at close (Pause keeps the queue; only Stop clears it), lock the tablet, overnight DHCP churn fires the recovery path, auto-resume plays into an empty mall. Fix: `Diagnostics.shouldAutoResume(lastRealTransportState)` — resume only from PLAYING/TRANSITIONING. `lastRealTransportState` tracks the last state that wasn't UNKNOWN, because outage polls return UNKNOWN and must not erase what the speaker was doing before it went dark. **USQ root cause still unconfirmed from logs** (alternative: Sonos alarm) — the flaw was real by inspection regardless.
+- **Foreign-stream stand-down.** `Diagnostics.isForeignUri` (anything without `:8077/audio/`) → monitor parks ALL recovery/advance/zombie logic and blocks auto-resume while Spotify Connect / Sonos app / alarm sessions play; logs `standing down`/`resuming monitor duty` once per transition. Without this, zombie-advance would hijack the speaker mid-song.
+- **External now-playing display.** `GetPositionInfo` now parses `dc:creator`/`upnp:album`/`upnp:albumArtURI` (Sonos reports full DIDL for any source); the UI shows "track — artist" plus an EXTERNAL STREAM badge for foreign sessions. Display is pure UPnP metadata — no Spotify API, no DRM involvement.
+
 ### Speaker-Side IP Churn + Auto-Resume (fixed v2.3.21)
 The v2.3.19 network watcher compares the **tablet's** live IP against `lastDiscoveryIp` — blind to the **speaker's** address changing. BC Paragon 2026-08-03 ~15:15: the venue's DHCP re-addressed the tablet (.111→.108, watcher fired ✓, re-discovered in 7 s ✓) and then re-addressed the **speaker** (.115→.114) minutes later. Tablet IP now stable → watcher silent → cached .115 dead for **2.4 h** (`state=UNKNOWN`, `lastOk=8615s`, every staff tap → "Failed to connect", ~20 `Queue SET`s with zero `/audio GET`s) until an app restart re-discovered. Two fixes:
 - **`checkSpeakerUnreachable`** (monitor loop): while a queue is active the monitor polls every 3 s, so `Diagnostics.speakerUnreachableTooLong` (no SOAP success for 90 s ≈ 30 consecutive failures) → re-discover (throttled 120 s). Only meaningful when a queue is active — idle, nothing polls, a big age just means "nobody asked". Uses `SonosManager.lastOkAgeMs(uuid)` (from the v2.3.11 `lastSoapSuccessMs` map).
@@ -127,7 +133,7 @@ export ANDROID_HOME="$HOME/Library/Android/sdk"
 - Repo: github.com/burntcones/sonostream (public)
 - `gh` CLI is authenticated as `burntcones`
 - OTA manifest: `update.json` in repo root (raw URL: `https://raw.githubusercontent.com/burntcones/sonostream/main/update.json`)
-- Current version: versionCode 43, versionName 2.3.21
+- Current version: versionCode 44, versionName 2.3.22
 
 ## OTA Update Workflow
 1. Bump `versionCode` and `versionName` in `app/build.gradle`
