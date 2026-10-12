@@ -340,6 +340,7 @@ object SonosManager {
         // to a different WiFi, every cached speaker IP is unreachable and the
         // audio URLs we hand Sonos point at an address we no longer own — the
         // monitor watches for this and re-discovers (BC Paragon, 10.4 h outage).
+        val prevDiscoveryIp = lastDiscoveryIp
         lastDiscoveryIp = localAddr.hostAddress
         diag.append("Using WiFi IP: ${localAddr.hostAddress}\n")
 
@@ -484,6 +485,14 @@ object SonosManager {
         diag.append("Total found: ${found.size} speaker(s)\n")
         lastDiagnostics = diag.toString()
         Log.d(TAG, "Discovery complete:\n$diag")
+
+        // A scan that heard nothing on the same network is a blip (speaker
+        // briefly unresponsive), not proof it's gone — keep what we had rather
+        // than leave staff with no speaker (Sunset Way, 2026-10-12).
+        if (Diagnostics.keepPreviousSpeakers(found.size, prevDiscoveryIp, localAddr.hostAddress, speakers.isNotEmpty())) {
+            logSoap("Discovery: found nothing on unchanged network ${localAddr.hostAddress} — keeping ${speakers.keys}")
+            return speakers
+        }
 
         // Resolve groups
         val grouped = resolveGroups(found)

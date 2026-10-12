@@ -11,8 +11,8 @@ android {
         applicationId "com.burntcones.sonostream"
         minSdk 26
         targetSdk 34
-        versionCode 44
-        versionName "2.3.22"
+        versionCode 45
+        versionName "2.3.23"
     }
 
     buildTypes {

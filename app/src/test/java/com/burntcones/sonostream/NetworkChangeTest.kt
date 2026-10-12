@@ -90,6 +90,26 @@ class NetworkChangeTest {
         assertTrue(Diagnostics.isForeignUri("x-rincon-queue:RINCON_ABC#0"))
     }
 
+    // ── Empty re-discovery on the same network (Sunset Way 2026-10-12): the
+    // speaker briefly stopped answering anything, a recovery scan found
+    // nothing, and the app wiped a known-good speaker — staff saw no speaker
+    // for up to ~2 min at a time. Same network + nothing found = blip, keep it. ──
+
+    @Test fun keepsKnownSpeakerWhenScanFindsNothingOnSameNetwork() {
+        assertTrue(Diagnostics.keepPreviousSpeakers(foundCount = 0, prevDiscoveryIp = "192.168.1.88", currentIp = "192.168.1.88", hadSpeakers = true))
+    }
+
+    @Test fun dropsSpeakersWhenNetworkChanged() {
+        // tablet moved networks: old speaker IPs are genuinely stale
+        assertFalse(Diagnostics.keepPreviousSpeakers(0, "10.196.79.200", "192.168.1.191", true))
+    }
+
+    @Test fun normalResultsAlwaysReplace() {
+        assertFalse(Diagnostics.keepPreviousSpeakers(1, "192.168.1.88", "192.168.1.88", true))
+        assertFalse(Diagnostics.keepPreviousSpeakers(0, "192.168.1.88", "192.168.1.88", hadSpeakers = false))
+        assertFalse(Diagnostics.keepPreviousSpeakers(0, null, "192.168.1.88", true))
+    }
+
     @Test fun ourStreamAndIdleAreNotForeign() {
         assertFalse(Diagnostics.isForeignUri("http://192.168.1.111:8077/audio/%2Fstorage%2Femulated%2F0%2FMusic%2Fa.mp3"))
         assertFalse(Diagnostics.isForeignUri(""))   // no session at all

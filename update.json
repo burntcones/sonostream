@@ -1,6 +1,6 @@
 {
-  "versionCode": 44,
-  "versionName": "2.3.22",
-  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v2.3.22/aux.apk",
-  "releaseNotes": "Fixes music starting by itself overnight: auto-recovery now only resumes playback if music was actually playing when the connection dropped — a paused queue stays paused. Also: if someone plays Spotify or uses the Sonos app directly, Aux now shows what's playing (with an External Stream badge) and stays out of the way instead of interrupting it."
+  "versionCode": 45,
+  "versionName": "2.3.23",
+  "apkUrl": "https://github.com/burntcones/sonostream/releases/download/v2.3.23/aux.apk",
+  "releaseNotes": "When the WiFi is shaky and the speaker briefly stops answering, Aux now keeps the speaker selected instead of losing it — no more 'no speaker' gaps while it reconnects."
 }

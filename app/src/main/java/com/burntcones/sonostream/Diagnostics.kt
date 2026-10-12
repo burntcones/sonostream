@@ -86,4 +86,21 @@ object Diagnostics {
      */
     fun isForeignUri(uri: String): Boolean =
         uri.isNotEmpty() && !uri.contains(":8077/audio/")
+
+    /**
+     * True when a discovery that found NOTHING should leave the existing
+     * speaker list alone instead of wiping it.
+     *
+     * Sunset Way 2026-10-12: the speaker intermittently stopped answering
+     * anything (SOAP connect timeouts, no SSDP reply) during busy evening
+     * hours while keeping the same IP. Recovery re-discovery found nothing and
+     * replaced a known-good speaker with an empty list — staff saw no speaker
+     * for up to ~2 min each time. Nothing found on the SAME network is a blip,
+     * not proof the speaker is gone; on a different network the old IPs are
+     * genuinely stale and must go. Only zero-result scans are affected — a
+     * scan that found units but filtered them all out (satellite-only) still
+     * yields empty, which is intended.
+     */
+    fun keepPreviousSpeakers(foundCount: Int, prevDiscoveryIp: String?, currentIp: String?, hadSpeakers: Boolean): Boolean =
+        foundCount == 0 && hadSpeakers && !prevDiscoveryIp.isNullOrBlank() && prevDiscoveryIp == currentIp
 }
